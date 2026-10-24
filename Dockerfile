@@ -28,6 +28,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Install helper tools
+RUN cp tg_send.py /usr/local/bin/tg-send && chmod +x /usr/local/bin/tg-send
+
 # Workspace setup
 RUN mkdir -p /app/workspace /app/inbox /app/data
 

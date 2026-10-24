@@ -20,6 +20,7 @@ class StateManager:
         self.history = []
         self.last_terminal_output = ""
         self.was_restarted = False
+        self.last_chat_id: int | None = 8327850869
         
         self.load()
 
@@ -139,6 +140,7 @@ class StateManager:
             "history": self.history[-20:],
             "chat_history": self.chat_history,
             "allowed_user_id": config.ALLOWED_USER_ID,
+            "last_chat_id": self.last_chat_id,
             "last_save": datetime.utcnow().isoformat(),
         }
         try:
@@ -164,6 +166,8 @@ class StateManager:
             
             if data.get("allowed_user_id") and config.ALLOWED_USER_ID is None:
                 config.set_allowed_user_id(data["allowed_user_id"])
+            if data.get("last_chat_id"):
+                self.last_chat_id = data["last_chat_id"]
             
             # If state file was loaded, mark restart recovery
             self.was_restarted = True

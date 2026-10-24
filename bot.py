@@ -52,6 +52,9 @@ def get_memory_info() -> tuple[int, int, float]:
 async def check_auth_or_reject(update: Update) -> bool:
     user = update.effective_user
     if is_authorized(user):
+        if update.effective_chat:
+            state.last_chat_id = update.effective_chat.id
+            state.save()
         return True
 
     uid = user.id if user else "Unknown"

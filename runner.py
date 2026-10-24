@@ -119,9 +119,46 @@ class AgyRunner:
             except Exception as e:
                 logger.warning(f"Storage manifest update/restore warning: {e}")
 
+            # Ensure AGENTS.md instructs agy how to deliver files directly to user
+            agents_md = project_dir / "AGENTS.md"
+            if not agents_md.exists():
+                try:
+                    agents_md.write_text(
+                        "# Workspace Assistant Instructions\n\n"
+                        "1. When the user asks for a file, or when you finish creating/fixing a file that the user needs:\n"
+                        "   Run the shell command: `tg-send <path_to_file> \"<optional caption>\"`\n"
+                        "   This immediately delivers the actual file directly into the user's Telegram chat.\n"
+                        "2. All files uploaded by the user are stored in `inbox/` and backed up to Telegram storage channel as listed in `TELEGRAM_STORAGE.md`.\n",
+                        encoding="utf-8"
+                    )
+                except Exception:
+                    pass
+
             # Smart Classification: Pure Bash commands run in Shell, everything else runs in agy AI!
             clean_p = prompt.strip()
             clean_p = re.sub(r"^(?:Task\s*\d+:|\d+[\.\)])\s*", "", clean_p).strip()
+
+            # Direct file sending request in Hindi / English (e.g. "bot.py do", "mujhe bot.py bhejo", "send bot.py")
+            file_req_match = re.match(
+                r"^(?:mujhe\s+)?(?:send|get|bhejo|de do|file do|download|de)\s+([a-zA-Z0-9_\-\.\/]+)$",
+                clean_p,
+                re.IGNORECASE
+            ) or re.match(
+                r"^([a-zA-Z0-9_\-\.\/]+)\s+(?:bhejo|do|de do|de|send)$",
+                clean_p,
+                re.IGNORECASE
+            )
+            if file_req_match:
+                req_file = file_req_match.group(1).strip()
+                if "." in req_file or "/" in req_file:
+                    return await self._handle_direct_file_send(
+                        file_name=req_file,
+                        project_dir=project_dir,
+                        bot=bot,
+                        chat_id=chat_id,
+                        live_message_id=live_message_id,
+                        start_time=start_time
+                    )
 
             # If user types bare 'agy' in text chat without prompt
             if clean_p.lower() == "agy":
@@ -235,6 +272,96 @@ class AgyRunner:
             pass
 
         return {"status": "success", "time": "0s", "response": ""}
+
+    async def _handle_direct_file_send(
+        self,
+        file_name: str,
+        project_dir: Path,
+        bot: Bot,
+        chat_id: int,
+        live_message_id: int,
+        start_time: float
+    ) -> dict:
+        """Sends requested file directly into Telegram chat."""
+        target = project_dir / file_name
+        found_file = None
+
+        if target.exists() and target.is_file():
+            found_file = target
+        else:
+            matches = list(project_dir.rglob(file_name))
+            if matches and matches[0].is_file():
+                found_file = matches[0]
+
+        # If not found on local disk, check Telegram Storage Channel manifest and restore!
+        if not found_file:
+            try:
+                from storage_manager import storage_manager
+                restored = await storage_manager.ensure_file_present(bot, file_name, project_dir / "inbox")
+                if restored and restored.exists():
+                    found_file = restored
+            except Exception:
+                pass
+
+        elapsed = f"{int(time.time() - start_time)}s"
+        dir_name = project_dir.name or "workspace"
+
+        if found_file:
+            try:
+                size_kb = round(found_file.stat().st_size / 1024, 1)
+                with open(found_file, "rb") as f:
+                    await bot.send_document(
+                        chat_id=chat_id,
+                        document=f,
+                        caption=f"📄 **{found_file.name}**\nSize: {size_kb} KB"
+                    )
+                box = format_terminal_box(
+                    dir_name=dir_name,
+                    prompt_line=f"send {file_name}",
+                    output_lines=[f"✅ File sent to chat: {found_file.name} ({size_kb} KB)"],
+                    status_text=f"✅ Done in {elapsed} | Exit 0"
+                )
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=live_message_id,
+                    text=mask_secrets(box),
+                    parse_mode="Markdown"
+                )
+                return {"status": "success", "time": elapsed, "response": ""}
+            except Exception as e:
+                err_box = format_terminal_box(
+                    dir_name=dir_name,
+                    prompt_line=f"send {file_name}",
+                    output_lines=[f"❌ Send failed: {e}"],
+                    status_text="❌ Error"
+                )
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=live_message_id,
+                        text=mask_secrets(err_box),
+                        parse_mode="Markdown"
+                    )
+                except Exception:
+                    pass
+                return {"status": "error", "error": str(e), "response": ""}
+        else:
+            box = format_terminal_box(
+                dir_name=dir_name,
+                prompt_line=f"send {file_name}",
+                output_lines=[f"❌ File '{file_name}' workspace ya storage channel par nahi mili."],
+                status_text="❌ Not Found | Exit 1"
+            )
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=live_message_id,
+                    text=mask_secrets(box),
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+            return {"status": "failed", "error": "file not found", "response": ""}
 
     async def _run_bash_stream(
         self,
