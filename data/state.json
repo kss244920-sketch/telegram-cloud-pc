@@ -1,5 +1,5 @@
 {
-  "mode": "queue",
+  "mode": "chat",
   "current_project": "default",
   "auto_push": true,
   "active_conversation_id": "65a7dea1-8028-4751-b4c4-f11ab0e358ba",
@@ -13,6 +13,6 @@
   },
   "queue": [],
   "history": [],
-  "allowed_user_id": null,
-  "last_save": "2026-10-24T06:50:12.136755"
+  "chat_history": {},
+  "allowed_user_id": null
 }

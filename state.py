@@ -10,19 +10,35 @@ STATE_FILE = config.DATA_DIR / "state.json"
 
 class StateManager:
     def __init__(self):
-        self.mode = "queue"  # 'queue' or 'instant'
+        self.mode = "chat"  # 'chat' (txt-to-txt), 'queue' (batch tasks), or 'instant'
         self.current_project = "default"
         self.auto_push = True
         self.active_conversation_id = str(uuid.uuid4())
         self.conversations = {}
         self.queue = []
         self.history = []
+        self.chat_history = {}  # conv_id -> [{"role": "user"|"model", "text": "...", "timestamp": "..."}]
         self.last_terminal_output = ""
         self.was_restarted = False
         
         self.load()
         if not self.conversations:
             self.new_conversation(title="Default Session")
+
+    def add_chat_message(self, conv_id: str, role: str, text: str):
+        if conv_id not in self.chat_history:
+            self.chat_history[conv_id] = []
+        self.chat_history[conv_id].append({
+            "role": role,
+            "text": text,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        if len(self.chat_history[conv_id]) > 40:
+            self.chat_history[conv_id] = self.chat_history[conv_id][-40:]
+        self.save()
+
+    def get_chat_messages(self, conv_id: str) -> list[dict]:
+        return self.chat_history.get(conv_id, [])
 
     def new_conversation(self, title: str | None = None) -> str:
         new_id = str(uuid.uuid4())
@@ -69,6 +85,7 @@ class StateManager:
             "conversations": self.conversations,
             "queue": self.queue,
             "history": self.history[-20:],
+            "chat_history": self.chat_history,
             "allowed_user_id": config.ALLOWED_USER_ID,
             "last_save": datetime.utcnow().isoformat(),
         }
@@ -91,6 +108,7 @@ class StateManager:
             self.active_conversation_id = data.get("active_conversation_id", self.active_conversation_id)
             self.queue = data.get("queue", [])
             self.history = data.get("history", [])
+            self.chat_history = data.get("chat_history", {})
             
             if data.get("allowed_user_id") and config.ALLOWED_USER_ID is None:
                 config.set_allowed_user_id(data["allowed_user_id"])

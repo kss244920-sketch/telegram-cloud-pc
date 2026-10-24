@@ -108,6 +108,9 @@ class QueueManager:
                 InlineKeyboardButton("✏️ Edit List", callback_data="q_edit_toggle"),
                 InlineKeyboardButton("🗑️ Clear List", callback_data="q_clear"),
             ])
+            buttons.append([
+                InlineKeyboardButton("💬 Txt Chat Mode", callback_data="switch_mode:chat")
+            ])
         else:
             buttons.append([
                 InlineKeyboardButton("🔙 Done Editing", callback_data="q_edit_toggle")

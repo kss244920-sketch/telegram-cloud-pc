@@ -6,7 +6,7 @@ import subprocess
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -15,6 +15,7 @@ from bot import create_bot_application, get_uptime_string, get_memory_info
 from terminal_pty import pty_session, verify_telegram_init_data
 from state import state
 from queue_manager import queue_manager
+from chat_service import chat_service
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -108,6 +109,102 @@ async def get_queue():
         "queue": state.queue,
         "is_processing": queue_manager.is_processing,
     }
+
+@app.post("/api/chat")
+async def chat_api(req: Request):
+    try:
+        body = await req.json()
+        message = body.get("message", "").strip()
+        conv_id = body.get("conversation_id") or state.active_conversation_id
+        if not message:
+            return JSONResponse({"error": "Empty message"}, status_code=400)
+        pdir = state.get_project_dir()
+        reply = await chat_service.generate_reply(prompt=message, conv_id=conv_id, project_dir=pdir)
+        return {"response": reply, "conversation_id": conv_id}
+    except Exception as e:
+        logger.error(f"Chat API error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/api/chat/history")
+async def chat_history_api(conv_id: str = Query(default="")):
+    target_conv = conv_id or state.active_conversation_id
+    return {"messages": state.get_chat_messages(target_conv)}
+
+@app.post("/api/queue/add")
+async def queue_add_api(req: Request):
+    body = await req.json()
+    title = body.get("title", "").strip()
+    if not title:
+        return JSONResponse({"error": "Empty title"}, status_code=400)
+    queue_manager.add_item(title=title, item_type="text")
+    return {"success": True, "queue": state.queue}
+
+@app.post("/api/queue/proceed")
+async def queue_proceed_api():
+    if queue_manager.is_processing:
+        return JSONResponse({"error": "Queue processing is already running"}, status_code=400)
+    if not state.queue:
+        return JSONResponse({"error": "Queue is empty"}, status_code=400)
+    pdir = state.get_project_dir()
+    asyncio.create_task(
+        queue_manager.process_queue(
+            bot=bot_app.bot,
+            chat_id=config.ALLOWED_USER_ID or 0,
+            project_dir=pdir
+        )
+    )
+    return {"success": True, "message": "Queue execution started"}
+
+@app.post("/api/queue/clear")
+async def queue_clear_api():
+    queue_manager.clear()
+    return {"success": True, "queue": []}
+
+@app.get("/api/files")
+async def files_api():
+    pdir = state.get_project_dir()
+    files = []
+    for root, dirs, filenames in os.walk(pdir):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ("__pycache__", "venv", "node_modules")]
+        for f in filenames:
+            if f.startswith("."):
+                continue
+            full_path = Path(root) / f
+            try:
+                rel_path = full_path.relative_to(pdir)
+                size_bytes = full_path.stat().st_size
+                files.append({
+                    "path": str(rel_path),
+                    "name": f,
+                    "size_kb": round(size_bytes / 1024, 1)
+                })
+            except Exception:
+                pass
+    return {"project": state.current_project, "files": sorted(files, key=lambda x: x["path"])}
+
+@app.get("/api/file-content")
+async def file_content_api(path: str = Query(...)):
+    pdir = state.get_project_dir()
+    resolved = (pdir / path).resolve()
+    if not resolved.is_relative_to(pdir.resolve()):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    if not resolved.exists() or not resolved.is_file():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    try:
+        content = resolved.read_text(encoding="utf-8", errors="ignore")
+        return {"path": path, "content": content}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/mode")
+async def mode_api(req: Request):
+    body = await req.json()
+    m = body.get("mode", "").strip().lower()
+    if m in ["chat", "queue", "instant"]:
+        state.mode = m
+        state.save()
+        return {"success": True, "mode": state.mode}
+    return JSONResponse({"error": "Invalid mode"}, status_code=400)
 
 @app.websocket("/ws/terminal")
 async def websocket_terminal(websocket: WebSocket, initData: str = Query(default="")):

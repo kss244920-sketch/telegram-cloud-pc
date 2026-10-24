@@ -5,7 +5,8 @@ import shutil
 import asyncio
 import psutil
 from pathlib import Path
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, ReplyKeyboardMarkup, KeyboardButton
+from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -23,6 +24,7 @@ from runner import runner
 from queue_manager import queue_manager
 from file_manager import FileManager
 from git_manager import GitManager
+from chat_service import chat_service
 
 logger = logging.getLogger("telegram_bot")
 START_TIME = time.time()
@@ -52,6 +54,15 @@ def get_memory_info() -> tuple[int, int, float]:
     except Exception:
         return 0, 512, 0.0
 
+def get_main_keyboard(mini_app_url: str) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("💬 Chat Mode (Txt)"), KeyboardButton("📋 Queue Mode (Tasks)")],
+            [KeyboardButton("📱 Open Mini App", web_app=WebAppInfo(url=mini_app_url)), KeyboardButton("📊 System Status")]
+        ],
+        resize_keyboard=True
+    )
+
 # ----------------- Command Handlers -----------------
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -64,29 +75,42 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mini_app_url = get_mini_app_url()
 
     keyboard = [
-        [InlineKeyboardButton("📟 Terminal Kholo (Mini App)", web_app=WebAppInfo(url=mini_app_url))],
-        [InlineKeyboardButton("📋 Kaam Ki List (Queue)", callback_data="open_queue")],
+        [
+            InlineKeyboardButton("💬 Chat Mode (Txt)", callback_data="switch_mode:chat"),
+            InlineKeyboardButton("📋 Queue Mode (Tasks)", callback_data="switch_mode:queue")
+        ],
+        [InlineKeyboardButton("📱 Open Mini App (Terminal & Chat)", web_app=WebAppInfo(url=mini_app_url))],
+        [
+            InlineKeyboardButton("📊 System Status", callback_data="open_status"),
+            InlineKeyboardButton("📁 Files Browser", callback_data="open_files")
+        ]
     ]
 
     restart_msg = "\n_🔔 Server restart ke baad wapas aa gaya, sab safe hai!_\n" if state.was_restarted else ""
 
     text = (
         f"👋 **Namaste! Cloud PC Remote Bot Active Hai!**\n{restart_msg}\n"
-        "Main aapka personal remote assistant hoon jo Render cloud machine par chalta hai.\n\n"
+        "Main aapka personal remote AI assistant hoon jo Render cloud server par chalta hai.\n\n"
         f"⚙️ **System Config:**\n"
         f"• **Owner**: @{config.ALLOWED_USERNAME} (Verified Lock ✅)\n"
+        f"• **Current Mode**: `{state.mode.upper()}`\n"
         f"• **Active Session**: {conv_title}\n"
-        f"• **Mode**: `{state.mode}` (Queue Mode)\n"
         f"• **Auto-Allow**: ON (Bina permission maange fast execution)\n\n"
         "💡 **Kaise use karein:**\n"
-        "1. Kuch bhi instruction, code, ya link chat mein bhejte jayein.\n"
-        "2. Saare kaam list mein judenge, aakhir mein **PROCEED** dabayein.\n"
-        "3. Real terminal dekhne ke liye neeche button dabayein!"
+        "1. 💬 **Chat Mode (Txt-to-Txt)**: Normal baatein karein, sawal puchiye, code explain karwayein. Turant direct text reply milega!\n"
+        "2. 📋 **Queue Mode (Tasks)**: Coding aur repo ke kaam list mein jodiye aur [PROCEED] se run karein.\n"
+        "3. 📱 **Mini App**: Terminal, Chat tab, Queue, aur Files browser phone par full screen kholein!\n\n"
+        "👇 _Neeche keyboard ya buttons se mode switch karein ya seedha message type karein:_"
     )
     await update.message.reply_text(
         mask_secrets(text),
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
+    )
+    # Also attach persistent reply keyboard
+    await update.message.reply_text(
+        "⚡ Quick Menu keyboard ready hai:",
+        reply_markup=get_main_keyboard(mini_app_url)
     )
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -187,14 +211,73 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args = context.args or []
-    if args and args[0].lower() in ["instant", "queue"]:
+    mini_app_url = get_mini_app_url()
+    if args and args[0].lower() in ["chat", "queue", "instant"]:
         state.mode = args[0].lower()
         state.save()
-        await update.message.reply_text(f"✅ Mode badal kar `{state.mode}` kar diya gaya hai.")
-    else:
         await update.message.reply_text(
-            f"ℹ️ Current mode: `{state.mode}`\n\nBadalne ke liye likhein: `/mode instant` ya `/mode queue`"
+            f"✅ Mode badal kar `{state.mode.upper()}` kar diya gaya hai.",
+            reply_markup=get_main_keyboard(mini_app_url)
         )
+    else:
+        keyboard = [
+            [
+                InlineKeyboardButton("💬 Chat (Txt-to-Txt)", callback_data="switch_mode:chat"),
+                InlineKeyboardButton("📋 Queue (Tasks)", callback_data="switch_mode:queue")
+            ],
+            [
+                InlineKeyboardButton("⚡ Instant Mode", callback_data="switch_mode:instant")
+            ]
+        ]
+        await update.message.reply_text(
+            f"ℹ️ **Current Mode**: `{state.mode.upper()}`\n\nNeeche se apna pasandida mode select karein:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+
+async def chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Force direct conversational response regardless of active mode."""
+    if not is_authorized(update.effective_user):
+        return
+
+    text = " ".join(context.args or []).strip()
+    if not text:
+        await update.message.reply_text("Usage: `/chat <aapka sawal/prompt>`\nYa direct baatein karne ke liye `💬 Chat Mode (Txt)` switch karein.")
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    pdir = state.get_project_dir()
+    reply = await chat_service.generate_reply(prompt=text, conv_id=state.active_conversation_id, project_dir=pdir)
+    masked = mask_secrets(reply)
+
+    mini_app_url = get_mini_app_url()
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 Switch to Queue", callback_data="switch_mode:queue"),
+            InlineKeyboardButton("📱 Mini App", web_app=WebAppInfo(url=mini_app_url))
+        ]
+    ])
+    try:
+        await update.message.reply_text(masked, reply_markup=kb, parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text(masked, reply_markup=kb)
+
+async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Force add task item to queue regardless of active mode."""
+    if not is_authorized(update.effective_user):
+        return
+
+    text = " ".join(context.args or []).strip()
+    if not text:
+        await update.message.reply_text("Usage: `/task <kaam ki description>`")
+        return
+
+    res = queue_manager.add_item(title=text, item_type="text")
+    if res.get("is_next_round"):
+        await update.message.reply_text(f"⏳ Kaam chal raha hai, item Agle Round mein jod diya gaya: \"{text[:40]}\"")
+    else:
+        q_text, markup = queue_manager.build_queue_text_and_markup()
+        await update.message.reply_text(f"➕ Task queue mein jud gaya:\n\n{q_text}", reply_markup=markup, parse_mode="Markdown")
 
 async def files_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user):
@@ -441,9 +524,75 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     pdir = state.get_project_dir()
+    mini_app_url = get_mini_app_url()
 
-    if state.mode == "instant":
-        # Run immediately
+    # 1. Handle Persistent Keyboard Button Clicks
+    if text in ["💬 Chat Mode (Txt)", "/mode chat"]:
+        state.mode = "chat"
+        state.save()
+        await update.message.reply_text(
+            "💬 **Chat Mode (Txt-to-Txt) Active!**\n\nAb aap jo bhi likhenge, AI seedha direct text reply karega (bina kisi queue ya git commit ke). Puchhiye koi bhi sawal!",
+            reply_markup=get_main_keyboard(mini_app_url),
+            parse_mode="Markdown"
+        )
+        return
+
+    if text in ["📋 Queue Mode (Tasks)", "/mode queue"]:
+        state.mode = "queue"
+        state.save()
+        q_text, markup = queue_manager.build_queue_text_and_markup()
+        await update.message.reply_text(
+            f"📋 **Queue Mode (Batch Tasks) Active!**\n\nAb aapke messages aur files kaam ki list mein judenge aur **[PROCEED]** dabane par run honge.\n\n{q_text}",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+        return
+
+    if text in ["📊 System Status", "/status"]:
+        await status_command(update, context)
+        return
+
+    if text in ["📱 Open Mini App", "📟 Open Mini App"]:
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📱 Open Cloud PC Mini App", web_app=WebAppInfo(url=mini_app_url))]
+        ])
+        await update.message.reply_text("📱 Mini app kholne ke liye neeche button dabayein:", reply_markup=kb)
+        return
+
+    # 2. Branch by Active Mode
+    if state.mode == "chat":
+        # Direct Text-to-Text Conversation
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+        reply = await chat_service.generate_reply(
+            prompt=text,
+            conv_id=state.active_conversation_id,
+            project_dir=pdir
+        )
+        masked_reply = mask_secrets(reply)
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📋 Switch to Queue", callback_data="switch_mode:queue"),
+                InlineKeyboardButton("📱 Mini App", web_app=WebAppInfo(url=mini_app_url))
+            ]
+        ])
+
+        if len(masked_reply) > 4000:
+            chunks = [masked_reply[i:i+4000] for i in range(0, len(masked_reply), 4000)]
+            for i, chunk in enumerate(chunks):
+                is_last = (i == len(chunks) - 1)
+                cur_kb = kb if is_last else None
+                try:
+                    await update.message.reply_text(chunk, reply_markup=cur_kb, parse_mode="Markdown")
+                except Exception:
+                    await update.message.reply_text(chunk, reply_markup=cur_kb)
+        else:
+            try:
+                await update.message.reply_text(masked_reply, reply_markup=kb, parse_mode="Markdown")
+            except Exception:
+                await update.message.reply_text(masked_reply, reply_markup=kb)
+
+    elif state.mode == "instant":
+        # Run immediately on workspace with agy
         status_msg = await update.message.reply_text("⚡ Instant mode: Kaam shuru ho raha hai...")
         await runner.run_task(
             prompt=text,
@@ -454,7 +603,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             conversation_id=state.active_conversation_id
         )
     else:
-        # Add to queue
+        # Default: Add to task queue
         res = queue_manager.add_item(title=text, item_type="text")
         if res.get("is_next_round"):
             await update.message.reply_text(f"⏳ Kaam chal raha hai, isliye ye item **Agle Round** mein jod diya gaya: \"{text[:40]}\"")
@@ -595,6 +744,41 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             parse_mode="Markdown"
         )
 
+    elif data.startswith("switch_mode:"):
+        new_mode = data.split(":", 1)[1]
+        if new_mode in ["chat", "queue", "instant"]:
+            state.mode = new_mode
+            state.save()
+            mini_app_url = get_mini_app_url()
+            mode_names = {
+                "chat": "💬 **Chat Mode (Txt-to-Txt)**\n\nDirect conversational replies active hain. Kuch bhi sawal ya instruction likhein!",
+                "queue": "📋 **Queue Mode (Batch Tasks)**\n\nKaam ki list banegi, aur **[PROCEED]** se execute hogi.",
+                "instant": "⚡ **Instant Mode**\n\nHar command seedha workspace par execute hoga."
+            }
+            await query.answer(f"Switched to {new_mode.upper()} mode!")
+            await query.message.reply_text(
+                f"✅ {mode_names.get(new_mode, new_mode)}",
+                reply_markup=get_main_keyboard(mini_app_url),
+                parse_mode="Markdown"
+            )
+
+    elif data == "open_status":
+        used_mb, total_mb, cpu = get_memory_info()
+        uptime_str = get_uptime_string()
+        text = (
+            "📊 **Cloud PC Status**\n\n"
+            f"• **RAM Usage**: {used_mb} MB / {total_mb} MB\n"
+            f"• **CPU**: {cpu}%\n"
+            f"• **Uptime**: {uptime_str}\n"
+            f"• **Queue Items**: {len(state.queue)} bache hain\n"
+            f"• **Mode**: `{state.mode.upper()}`\n"
+        )
+        await query.message.reply_text(text, parse_mode="Markdown")
+
+    elif data == "open_files":
+        header, markup = FileManager.build_file_browser(pdir)
+        await query.message.reply_text(header, reply_markup=markup, parse_mode="Markdown")
+
     elif data.startswith("fb_dir:"):
         sub = data.split(":", 1)[1]
         header, markup = FileManager.build_file_browser(pdir, sub)
@@ -612,6 +796,8 @@ def create_bot_application() -> Application:
     # Commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("chat", chat_command))
+    app.add_handler(CommandHandler("task", task_command))
     app.add_handler(CommandHandler("queue", queue_command))
     app.add_handler(CommandHandler("stop", stop_command))
     app.add_handler(CommandHandler("new", new_command))

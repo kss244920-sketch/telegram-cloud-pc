@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Cloud PC Terminal</title>
+  <title>Cloud PC Remote</title>
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- xterm.js CDN -->
@@ -16,19 +16,20 @@
     body {
       background-color: #1a1b26;
       color: #c0caf5;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       height: 100vh;
       display: flex;
       flex-direction: column;
       overflow: hidden;
       user-select: none;
     }
+
     /* Top Bar */
     .top-bar {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 8px 12px;
+      padding: 10px 14px;
       background-color: #16161e;
       border-bottom: 1px solid #292e42;
       font-size: 13px;
@@ -44,20 +45,140 @@
       box-shadow: 0 0 6px #9ece6a;
     }
     .badge {
-      background: #24283b; padding: 2px 6px; border-radius: 4px; font-size: 11px;
+      background: #24283b; padding: 3px 8px; border-radius: 4px; font-size: 11px; color: #7aa2f7;
     }
+
     /* Tab Contents */
     .tab-content { flex: 1; display: none; overflow: hidden; position: relative; }
     .tab-content.active { display: flex; flex-direction: column; }
-    
-    /* Terminal Area */
+
+    /* --- TAB 1: CHAT (Txt-to-Txt) --- */
+    #tabChat { background: #1a1b26; }
+    .chat-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      user-select: text;
+    }
+    .msg {
+      max-width: 85%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 13.5px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+    .msg.user {
+      align-self: flex-end;
+      background: #3b82f6;
+      color: #fff;
+      border-bottom-right-radius: 2px;
+    }
+    .msg.model {
+      align-self: flex-start;
+      background: #24283b;
+      color: #c0caf5;
+      border: 1px solid #414868;
+      border-bottom-left-radius: 2px;
+    }
+    .msg pre {
+      background: #16161e;
+      border: 1px solid #292e42;
+      border-radius: 6px;
+      padding: 8px;
+      margin: 8px 0;
+      overflow-x: auto;
+      font-family: monospace;
+      font-size: 12px;
+      color: #7dcfff;
+    }
+    .msg code {
+      font-family: monospace;
+      background: #16161e;
+      padding: 2px 4px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .typing-indicator {
+      align-self: flex-start;
+      background: #24283b;
+      padding: 8px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      color: #7aa2f7;
+      display: none;
+    }
+    .quick-chips {
+      display: flex;
+      gap: 6px;
+      padding: 8px 12px;
+      background: #16161e;
+      overflow-x: auto;
+      scrollbar-width: none;
+      border-top: 1px solid #24283b;
+    }
+    .quick-chips::-webkit-scrollbar { display: none; }
+    .chip {
+      background: #24283b;
+      color: #7aa2f7;
+      border: 1px solid #414868;
+      border-radius: 16px;
+      padding: 4px 10px;
+      font-size: 11px;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .chat-input-bar {
+      display: flex;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #16161e;
+      border-top: 1px solid #292e42;
+    }
+    .chat-input-bar textarea {
+      flex: 1;
+      background: #24283b;
+      border: 1px solid #414868;
+      border-radius: 8px;
+      color: #fff;
+      padding: 8px 12px;
+      font-size: 13.5px;
+      resize: none;
+      height: 40px;
+      max-height: 90px;
+      outline: none;
+      font-family: inherit;
+    }
+    .chat-input-bar button {
+      background: #7aa2f7;
+      color: #1a1b26;
+      border: none;
+      border-radius: 8px;
+      font-weight: bold;
+      padding: 0 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+    }
+
+    /* --- TAB 2: TERMINAL --- */
     #terminal-container {
       flex: 1;
       background: #1a1b26;
       padding: 4px;
       overflow: hidden;
     }
-    /* Shortcut Rows */
     .shortcuts-container {
       background-color: #16161e;
       border-top: 1px solid #292e42;
@@ -83,11 +204,8 @@
       font-weight: bold;
       white-space: nowrap;
       cursor: pointer;
-      active: scale(0.95);
     }
     .key-btn:active { background: #3b4261; color: #fff; }
-    
-    /* Quick Input Bar */
     .quick-input-bar {
       display: flex;
       gap: 6px;
@@ -114,8 +232,6 @@
       padding: 6px 14px;
       cursor: pointer;
     }
-
-    /* Scroll to Bottom Button */
     .scroll-bottom-btn {
       position: absolute;
       right: 14px;
@@ -132,7 +248,174 @@
       box-shadow: 0 4px 8px rgba(0,0,0,0.5);
     }
 
-    /* Tabs Bar */
+    /* --- TAB 3: QUEUE --- */
+    .pane-view {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px;
+      font-size: 13px;
+    }
+    .action-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .btn-proceed {
+      flex: 2;
+      background: #9ece6a;
+      color: #1a1b26;
+      border: none;
+      border-radius: 6px;
+      padding: 10px;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .btn-clear {
+      flex: 1;
+      background: #f7768e;
+      color: #1a1b26;
+      border: none;
+      border-radius: 6px;
+      padding: 10px;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .queue-add-box {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+    .queue-add-box input {
+      flex: 1;
+      background: #24283b;
+      border: 1px solid #414868;
+      border-radius: 6px;
+      color: #fff;
+      padding: 8px 10px;
+      font-size: 13px;
+      outline: none;
+    }
+    .queue-add-box button {
+      background: #7aa2f7;
+      color: #1a1b26;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+      padding: 0 14px;
+      cursor: pointer;
+    }
+    .item-card {
+      background: #24283b;
+      border: 1px solid #414868;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .item-card.running { border-color: #e0af68; }
+    .item-card.done { border-color: #9ece6a; }
+
+    /* --- TAB 4: FILES --- */
+    .file-item {
+      background: #24283b;
+      border: 1px solid #414868;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+    }
+    .file-item:hover { border-color: #7aa2f7; }
+
+    /* Modal for File Viewing */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.8);
+      display: none;
+      flex-direction: column;
+      z-index: 100;
+      padding: 12px;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-card {
+      flex: 1;
+      background: #1a1b26;
+      border: 1px solid #414868;
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      background: #16161e;
+      border-bottom: 1px solid #292e42;
+      font-size: 13px;
+    }
+    .modal-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      color: #c0caf5;
+      user-select: text;
+    }
+
+    /* --- TAB 5: STATUS --- */
+    .status-card {
+      background: #24283b;
+      border: 1px solid #414868;
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+    .status-card h3 {
+      font-size: 14px;
+      color: #7aa2f7;
+      margin-bottom: 8px;
+    }
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      margin: 6px 0;
+      font-size: 12.5px;
+    }
+    .mode-pills {
+      display: flex;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .mode-btn {
+      flex: 1;
+      background: #16161e;
+      color: #c0caf5;
+      border: 1px solid #414868;
+      border-radius: 6px;
+      padding: 8px 4px;
+      font-size: 11px;
+      font-weight: bold;
+      cursor: pointer;
+      text-align: center;
+    }
+    .mode-btn.active {
+      background: #7aa2f7;
+      color: #1a1b26;
+      border-color: #7aa2f7;
+    }
+
+    /* Bottom Navigation */
     .bottom-nav {
       display: flex;
       background: #13131a;
@@ -140,7 +423,7 @@
     }
     .nav-btn {
       flex: 1;
-      padding: 8px 4px;
+      padding: 10px 4px;
       text-align: center;
       background: none;
       border: none;
@@ -150,24 +433,9 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 2px;
+      gap: 3px;
     }
     .nav-btn.active { color: #7aa2f7; font-weight: bold; }
-
-    /* Other Tab Views */
-    .pane-view {
-      flex: 1;
-      overflow-y: auto;
-      padding: 12px;
-      font-size: 13px;
-    }
-    .item-card {
-      background: #24283b;
-      border: 1px solid #414868;
-      border-radius: 6px;
-      padding: 10px;
-      margin-bottom: 8px;
-    }
   </style>
 </head>
 <body>
@@ -178,11 +446,38 @@
       <strong id="projectName">Cloud PC</strong>
       <span id="connStatus" class="badge">Connecting...</span>
     </div>
-    <div id="serviceStatus" class="badge">Render Free</div>
+    <div id="serviceStatus" class="badge">Online</div>
   </div>
 
-  <!-- Tab 1: Terminal -->
-  <div id="tabTerminal" class="tab-content active">
+  <!-- TAB 1: CHAT (Txt-to-Txt) -->
+  <div id="tabChat" class="tab-content active">
+    <div class="chat-container">
+      <div class="chat-messages" id="chatMessages">
+        <div class="msg model">
+          👋 <strong>Cloud PC AI Chat Active Hai!</strong><br>
+          Aap yahan direct sawal puch sakte hain, code debug karwa sakte hain, ya project discuss kar sakte hain.
+        </div>
+      </div>
+      <div id="typingIndicator" class="typing-indicator">🧠 AI soch raha hai...</div>
+
+      <!-- Quick Prompt Chips -->
+      <div class="quick-chips">
+        <span class="chip" onclick="quickPrompt('Git status check karo')">📊 Git Status</span>
+        <span class="chip" onclick="quickPrompt('Project files list karo')">📁 Project Files</span>
+        <span class="chip" onclick="quickPrompt('Agy status aur memory report')">⚙️ System Info</span>
+        <span class="chip" onclick="quickPrompt('Kya kaam pending hai queue me?')">📋 Check Queue</span>
+      </div>
+
+      <!-- Chat Input Form -->
+      <div class="chat-input-bar">
+        <textarea id="chatInput" placeholder="Sawal ya prompt likhein (Txt-to-Txt)..." onkeydown="handleChatKeyDown(event)"></textarea>
+        <button id="chatSendBtn" onclick="sendChatMessage()">➤</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 2: TERMINAL (Cloud PC PTY) -->
+  <div id="tabTerminal" class="tab-content">
     <div id="terminal-container"></div>
     <button id="scrollBottomBtn" class="scroll-bottom-btn" onclick="scrollToBottom()">⬇️ Neeche Jao</button>
 
@@ -210,51 +505,84 @@
       </div>
     </div>
 
-    <!-- Quick Text Input for Mobile -->
+    <!-- Quick Text Input for Terminal -->
     <div class="quick-input-bar">
-      <input type="text" id="quickInput" placeholder="Command ya instruction type karein..." onkeydown="if(event.key==='Enter') sendInputText()">
+      <input type="text" id="quickInput" placeholder="Terminal command type karein..." onkeydown="if(event.key==='Enter') sendInputText()">
       <button onclick="sendInputText()">Send</button>
     </div>
   </div>
 
-  <!-- Tab 2: Files -->
+  <!-- TAB 3: QUEUE (Tasks) -->
+  <div id="tabQueue" class="tab-content">
+    <div class="pane-view">
+      <div class="action-row">
+        <button class="btn-proceed" onclick="proceedQueue()">▶️ PROCEED: Sab Kuch Chalao</button>
+        <button class="btn-clear" onclick="clearQueue()">🗑️ Clear</button>
+      </div>
+      <div class="queue-add-box">
+        <input type="text" id="queueAddInput" placeholder="Naya task likhein (e.g. fix bug in main.py)..." onkeydown="if(event.key==='Enter') addToQueue()">
+        <button onclick="addToQueue()">➕ Jodo</button>
+      </div>
+      <div id="queueItemsList">
+        <p style="color:#565f89; text-align:center; padding: 20px;">Tasks load ho rahe hain...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 4: FILES -->
   <div id="tabFiles" class="tab-content">
     <div class="pane-view" id="filesList">
-      <p style="color:#7aa2f7;">📁 Project Files load ho rahi hain...</p>
+      <p style="color:#565f89; text-align:center; padding: 20px;">📁 Project Files load ho rahi hain...</p>
     </div>
   </div>
 
-  <!-- Tab 3: History -->
-  <div id="tabHistory" class="tab-content">
-    <div class="pane-view" id="historyList">
-      <p style="color:#7aa2f7;">📜 Past sessions and summaries...</p>
-    </div>
-  </div>
-
-  <!-- Tab 4: Queue -->
-  <div id="tabQueue" class="tab-content">
-    <div class="pane-view" id="queueList">
-      <p style="color:#7aa2f7;">📋 Tasks queue load ho rahi hai...</p>
-    </div>
-  </div>
-
-  <!-- Tab 5: Status -->
+  <!-- TAB 5: STATUS -->
   <div id="tabStatus" class="tab-content">
-    <div class="pane-view" id="systemStatusView">
-      <div class="item-card">
-        <h3>Server Metrics</h3>
-        <p id="ramMetrics">RAM: checking...</p>
-        <p id="uptimeMetrics">Uptime: checking...</p>
+    <div class="pane-view">
+      <div class="status-card">
+        <h3>🎯 Active Mode Switcher</h3>
+        <p style="font-size:12px; color:#a9b1d6; margin-bottom:6px;">Chunein ki bot DM aur app mein kaise interact kare:</p>
+        <div class="mode-pills">
+          <button id="modeBtnChat" class="mode-btn" onclick="setMode('chat')">💬 Chat (Txt)</button>
+          <button id="modeBtnQueue" class="mode-btn" onclick="setMode('queue')">📋 Queue (Tasks)</button>
+          <button id="modeBtnInstant" class="mode-btn" onclick="setMode('instant')">⚡ Instant</button>
+        </div>
       </div>
+
+      <div class="status-card">
+        <h3>📊 Cloud Server Metrics</h3>
+        <div class="metric-row"><span>RAM:</span><strong id="ramMetrics">Checking...</strong></div>
+        <div class="metric-row"><span>CPU:</span><strong id="cpuMetrics">Checking...</strong></div>
+        <div class="metric-row"><span>Uptime:</span><strong id="uptimeMetrics">Checking...</strong></div>
+        <div class="metric-row"><span>Owner:</span><strong id="ownerMetric">@OwAtom</strong></div>
+      </div>
+
+      <div class="status-card">
+        <h3>🤖 Google Antigravity (agy)</h3>
+        <div class="metric-row"><span>Status:</span><strong id="agyStatusMetric">Checking...</strong></div>
+        <div class="metric-row"><span>Version:</span><strong id="agyVersionMetric">-</strong></div>
+        <div class="metric-row"><span>Path:</span><code id="agyPathMetric" style="font-size:11px;">-</code></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- File Viewer Modal -->
+  <div id="fileModal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span id="modalFileName" style="font-weight:bold; color:#7aa2f7;">File</span>
+        <button style="background:none; border:none; color:#f7768e; font-size:16px; cursor:pointer;" onclick="closeFileModal()">✖</button>
+      </div>
+      <div id="modalFileBody" class="modal-body">Loading...</div>
     </div>
   </div>
 
   <!-- Bottom Navigation -->
   <div class="bottom-nav">
-    <button class="nav-btn active" onclick="switchTab('tabTerminal', this)">📟 Terminal</button>
-    <button class="nav-btn" onclick="switchTab('tabFiles', this)">📁 Files</button>
-    <button class="nav-btn" onclick="switchTab('tabHistory', this)">📜 History</button>
+    <button class="nav-btn active" onclick="switchTab('tabChat', this)">💬 Chat</button>
+    <button class="nav-btn" onclick="switchTab('tabTerminal', this)">📟 Terminal</button>
     <button class="nav-btn" onclick="switchTab('tabQueue', this)">📋 Queue</button>
+    <button class="nav-btn" onclick="switchTab('tabFiles', this)">📁 Files</button>
     <button class="nav-btn" onclick="switchTab('tabStatus', this)">📊 Status</button>
   </div>
 
@@ -268,8 +596,113 @@
 
     const initData = tg?.initData || "";
     let term, fitAddon, socket;
+    let terminalInitialized = false;
 
+    // --- NAVIGATION TABS ---
+    function switchTab(tabId, btn) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+      document.getElementById(tabId).classList.add('active');
+      btn.classList.add('active');
+
+      if (tabId === 'tabTerminal') {
+        if (!terminalInitialized) {
+          initTerminal();
+        } else {
+          setTimeout(() => fitAddon?.fit(), 100);
+        }
+      } else if (tabId === 'tabQueue') {
+        fetchQueue();
+      } else if (tabId === 'tabFiles') {
+        fetchFiles();
+      } else if (tabId === 'tabStatus') {
+        fetchStatus();
+      }
+    }
+
+    // --- CHAT LOGIC (Txt-to-Txt) ---
+    async function loadChatHistory() {
+      try {
+        const res = await fetch('/api/chat/history');
+        const data = await res.json();
+        const messages = data.messages || [];
+        if (messages.length > 0) {
+          const container = document.getElementById('chatMessages');
+          container.innerHTML = '';
+          messages.forEach(m => appendChatMessage(m.role, m.text));
+        }
+      } catch (e) {}
+    }
+
+    function appendChatMessage(role, text) {
+      const container = document.getElementById('chatMessages');
+      const div = document.createElement('div');
+      div.className = `msg ${role === 'user' ? 'user' : 'model'}`;
+
+      // Format simple code blocks
+      let formatted = text
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\n/g, '<br>');
+
+      div.innerHTML = formatted;
+      container.appendChild(div);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function handleChatKeyDown(event) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendChatMessage();
+      }
+    }
+
+    function quickPrompt(text) {
+      document.getElementById('chatInput').value = text;
+      sendChatMessage();
+    }
+
+    async function sendChatMessage() {
+      const input = document.getElementById('chatInput');
+      const text = input.value.trim();
+      if (!text) return;
+
+      appendChatMessage('user', text);
+      input.value = '';
+
+      const typing = document.getElementById('typingIndicator');
+      typing.style.display = 'block';
+      const sendBtn = document.getElementById('chatSendBtn');
+      sendBtn.disabled = true;
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text })
+        });
+        const data = await res.json();
+        typing.style.display = 'none';
+        sendBtn.disabled = false;
+
+        if (data.response) {
+          appendChatMessage('model', data.response);
+        } else if (data.error) {
+          appendChatMessage('model', '❌ Error: ' + data.error);
+        }
+      } catch (err) {
+        typing.style.display = 'none';
+        sendBtn.disabled = false;
+        appendChatMessage('model', '❌ Network error, please try again.');
+      }
+    }
+
+    // --- TERMINAL LOGIC (xterm.js + PTY) ---
     function initTerminal() {
+      if (terminalInitialized) return;
+      terminalInitialized = true;
+
       term = new Terminal({
         convertEol: true,
         scrollback: 10000,
@@ -298,7 +731,7 @@
         term.loadAddon(new WebLinksAddon.WebLinksAddon());
       }
       term.open(document.getElementById('terminal-container'));
-      fitAddon.fit();
+      setTimeout(() => fitAddon.fit(), 100);
 
       term.onData(data => {
         if (socket && socket.readyState === WebSocket.OPEN) {
@@ -306,17 +739,14 @@
         }
       });
 
-      window.addEventListener('resize', () => {
-        fitAddon.fit();
-      });
-
+      window.addEventListener('resize', () => fitAddon?.fit());
       connectWebSocket();
     }
 
     function connectWebSocket() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${window.location.host}/ws/terminal?initData=${encodeURIComponent(initData)}`;
-      
+
       updateConnState(false, "Connecting...");
       socket = new WebSocket(wsUrl);
 
@@ -373,47 +803,176 @@
           socket.send(text);
         }
       } catch (e) {
-        alert("Clipboard permission required to paste");
+        alert("Clipboard permission zaroori hai");
       }
     }
 
     function scrollToBottom() {
-      term.scrollToBottom();
+      term?.scrollToBottom();
     }
 
-    function switchTab(tabId, btn) {
-      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-      document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
-      document.getElementById(tabId).classList.add('active');
-      btn.classList.add('active');
+    // --- QUEUE LOGIC ---
+    async function fetchQueue() {
+      try {
+        const res = await fetch('/api/queue');
+        const data = await res.json();
+        const list = document.getElementById('queueItemsList');
+        const items = data.queue || [];
 
-      if (tabId === 'tabTerminal') {
-        setTimeout(() => fitAddon?.fit(), 100);
-      } else if (tabId === 'tabStatus') {
-        fetchStatus();
+        if (items.length === 0) {
+          list.innerHTML = '<p style="color:#565f89; text-align:center; padding: 25px;">Queue khali hai.<br>Upar se task likhkar jodiye ya Chat mein instruction bhejein.</p>';
+          return;
+        }
+
+        let html = '';
+        items.forEach((item, idx) => {
+          const statusClass = item.status === 'running' ? 'running' : (item.status === 'done' ? 'done' : '');
+          const statusLabel = item.status === 'running' ? '⏳ Running' : (item.status === 'done' ? '✅ Done' : 'Pending');
+          html += `
+            <div class="item-card ${statusClass}">
+              <div>
+                <strong>#${idx + 1}</strong>: ${item.title}
+              </div>
+              <span class="badge">${statusLabel}</span>
+            </div>
+          `;
+        });
+        list.innerHTML = html;
+      } catch (e) {}
+    }
+
+    async function addToQueue() {
+      const input = document.getElementById('queueAddInput');
+      const val = input.value.trim();
+      if (!val) return;
+
+      try {
+        await fetch('/api/queue/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: val })
+        });
+        input.value = '';
+        fetchQueue();
+      } catch (e) {}
+    }
+
+    async function proceedQueue() {
+      try {
+        const res = await fetch('/api/queue/proceed', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          alert("🚀 Queue execution shuru ho gaya!");
+          fetchQueue();
+        } else {
+          alert(data.error || "Queue shuru nahi ho payi");
+        }
+      } catch (e) {}
+    }
+
+    async function clearQueue() {
+      if (!confirm("Kya aap saari tasks list khali karna chahte hain?")) return;
+      try {
+        await fetch('/api/queue/clear', { method: 'POST' });
+        fetchQueue();
+      } catch (e) {}
+    }
+
+    // --- FILES LOGIC ---
+    async function fetchFiles() {
+      try {
+        const res = await fetch('/api/files');
+        const data = await res.json();
+        const list = document.getElementById('filesList');
+        const files = data.files || [];
+
+        if (files.length === 0) {
+          list.innerHTML = '<p style="color:#565f89; text-align:center; padding: 25px;">Koi file nahi mili.</p>';
+          return;
+        }
+
+        let html = '';
+        files.forEach(f => {
+          html += `
+            <div class="file-item" onclick="viewFile('${f.path}', '${f.name}')">
+              <span>📄 <strong>${f.name}</strong> <small style="color:#565f89;">(${f.path})</small></span>
+              <span class="badge">${f.size_kb} KB</span>
+            </div>
+          `;
+        });
+        list.innerHTML = html;
+      } catch (e) {}
+    }
+
+    async function viewFile(path, name) {
+      const modal = document.getElementById('fileModal');
+      document.getElementById('modalFileName').innerText = name;
+      const body = document.getElementById('modalFileBody');
+      body.innerText = 'File content load ho raha hai...';
+      modal.classList.add('open');
+
+      try {
+        const res = await fetch(`/api/file-content?path=${encodeURIComponent(path)}`);
+        const data = await res.json();
+        if (data.content !== undefined) {
+          body.innerText = data.content;
+        } else {
+          body.innerText = data.error || 'Content open nahi ho paya.';
+        }
+      } catch (e) {
+        body.innerText = 'Error loading file content.';
       }
     }
 
+    function closeFileModal() {
+      document.getElementById('fileModal').classList.remove('open');
+    }
+
+    // --- STATUS LOGIC ---
     async function fetchStatus() {
       try {
         const res = await fetch('/api/system-info');
         const data = await res.json();
-        document.getElementById('ramMetrics').innerText = `RAM: ${data.ram} | CPU: ${data.cpu}`;
-        document.getElementById('uptimeMetrics').innerText = `Uptime: ${data.uptime}`;
-        
-        const badge = document.getElementById('serviceStatus');
-        if (data.agy_installed) {
-          badge.innerText = `agy ${data.agy_version.split(' ')[0]}`;
-          badge.style.color = '#9ece6a';
-        } else {
-          badge.innerText = 'agy not found';
-          badge.style.color = '#f7768e';
-        }
+        document.getElementById('ramMetrics').innerText = data.ram;
+        document.getElementById('cpuMetrics').innerText = data.cpu;
+        document.getElementById('uptimeMetrics').innerText = data.uptime;
+        document.getElementById('ownerMetric').innerText = data.owner;
+
+        document.getElementById('agyStatusMetric').innerText = data.agy_installed ? 'Installed ✅' : 'Missing ❌';
+        document.getElementById('agyVersionMetric').innerText = data.agy_version || '-';
+        document.getElementById('agyPathMetric').innerText = data.agy_path || '-';
+
+        // Update Mode Buttons
+        const mode = data.mode || 'chat';
+        ['Chat', 'Queue', 'Instant'].forEach(m => {
+          const btn = document.getElementById('modeBtn' + m);
+          if (btn) {
+            if (m.toLowerCase() === mode.toLowerCase()) {
+              btn.classList.add('active');
+            } else {
+              btn.classList.remove('active');
+            }
+          }
+        });
       } catch(e) {}
     }
 
+    async function setMode(newMode) {
+      try {
+        const res = await fetch('/api/mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: newMode })
+        });
+        const data = await res.json();
+        if (data.success) {
+          fetchStatus();
+        }
+      } catch (e) {}
+    }
+
     window.onload = () => {
-      initTerminal();
+      loadChatHistory();
       fetchStatus();
     };
   </script>
