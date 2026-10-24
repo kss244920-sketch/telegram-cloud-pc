@@ -49,6 +49,27 @@ def get_memory_info() -> tuple[int, int, float]:
     except Exception:
         return 0, 512, 0.0
 
+async def check_auth_or_reject(update: Update) -> bool:
+    user = update.effective_user
+    if is_authorized(user):
+        return True
+
+    uid = user.id if user else "Unknown"
+    uname = f"@{user.username}" if user and user.username else "No username"
+    text = (
+        f"⛔ **Access Denied**\n\n"
+        f"Ye bot private hai:\n• Aapka ID: `{uid}`\n• Username: {uname}\n\n"
+        f"Authorized Owner: `@{config.ALLOWED_USERNAME}`"
+    )
+    try:
+        if update.message:
+            await update.message.reply_text(text, parse_mode="Markdown")
+        elif update.callback_query:
+            await update.callback_query.answer(f"Access Denied: ID={uid}", show_alert=True)
+    except Exception:
+        pass
+    return False
+
 def render_buffer_text_and_markup() -> tuple[str | None, InlineKeyboardMarkup | None]:
     if not state.prompt_buffer:
         return None, None
@@ -70,7 +91,7 @@ def render_buffer_text_and_markup() -> tuple[str | None, InlineKeyboardMarkup | 
 # ----------------- Command Handlers -----------------
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
+    if not await check_auth_or_reject(update):
         return
 
     active_id = state.active_conversation_id
@@ -93,7 +114,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def session_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
+    if not await check_auth_or_reject(update):
         return
 
     used_mb, total_mb, cpu = get_memory_info()
@@ -108,7 +129,7 @@ async def session_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
+    if not await check_auth_or_reject(update):
         return
 
     new_id = state.new_conversation()
@@ -116,7 +137,7 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✨ Naya agy session start hua: `{new_id[:8]}`", parse_mode="Markdown")
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
+    if not await check_auth_or_reject(update):
         return
 
     if runner.is_running:
@@ -127,7 +148,7 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ℹ️ Koi process active nahi hai. Input buffer reset ho gaya.")
 
 async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
+    if not await check_auth_or_reject(update):
         return
 
     msg = await update.message.reply_text("⏳ Workspace snapshot Telegram storage channel par upload ho raha hai...")
@@ -139,7 +160,7 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("❌ Snapshot backup fail ho gaya.")
 
 async def get_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
+    if not await check_auth_or_reject(update):
         return
 
     args = context.args or []
@@ -204,7 +225,7 @@ def save_auth_bundle_to_render() -> bool:
 
 async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global active_login_process
-    if not is_authorized(update.effective_user):
+    if not await check_auth_or_reject(update):
         return
 
     msg = await update.message.reply_text("⏳ Google OAuth Sign-in link generate ho rahi hai...")
@@ -253,7 +274,7 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global active_login_process
-    if not is_authorized(update.effective_user):
+    if not await check_auth_or_reject(update):
         return
 
     args = context.args or []
@@ -282,7 +303,7 @@ async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text(f"❌ Verification failed: {e}")
 
 async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
+    if not await check_auth_or_reject(update):
         return
 
     args = context.args or []
@@ -303,7 +324,7 @@ async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_chat.send_message("✅ API Key successfully set ho gayi aur secure kar di gayi!")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
+    if not await check_auth_or_reject(update):
         return
 
     text = (
@@ -323,7 +344,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ----------------- Message & File Handlers -----------------
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
+    if not await check_auth_or_reject(update):
         return
 
     text = update.message.text.strip()
@@ -354,7 +375,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     state.buffer_message_id = msg.message_id
 
 async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
+    if not await check_auth_or_reject(update):
         return
 
     if runner.is_running:
@@ -463,7 +484,7 @@ async def execute_terminal_task(
 
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if not is_authorized(query.from_user):
+    if not await check_auth_or_reject(update):
         return
 
     await query.answer()
@@ -480,10 +501,13 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         # Combine buffered items into prompt
-        prompt_lines = []
-        for i, item in enumerate(state.prompt_buffer, 1):
-            prompt_lines.append(f"{i}. {item['text']}")
-        combined_prompt = "\n".join(prompt_lines)
+        if len(state.prompt_buffer) == 1:
+            combined_prompt = state.prompt_buffer[0]["text"]
+        else:
+            prompt_lines = []
+            for i, item in enumerate(state.prompt_buffer, 1):
+                prompt_lines.append(f"{i}. {item['text']}")
+            combined_prompt = "\n".join(prompt_lines)
 
         state.clear_buffer()
         conv_id = state.active_conversation_id

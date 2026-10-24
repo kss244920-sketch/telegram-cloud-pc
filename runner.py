@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -126,6 +127,7 @@ class AgyRunner:
 
             # Check if prompt is a direct bash command
             clean_p = prompt.strip()
+            clean_p = re.sub(r"^(?:Task\s*\d+:|\d+[\.\)])\s*", "", clean_p).strip()
             if clean_p.startswith("$ "):
                 clean_p = clean_p[2:].strip()
 

@@ -38,13 +38,43 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Telegram Cloud PC terminal bot service...")
     await bot_app.initialize()
     await bot_app.start()
-    await bot_app.updater.start_polling(drop_pending_updates=True)
-    logger.info("Telegram Bot polling started successfully.")
+
+    # Resilient polling supervisor that handles Render zero-downtime rolling deploys
+    polling_task = None
+    is_shutting_down = False
+
+    async def supervisor():
+        while not is_shutting_down:
+            try:
+                if not bot_app.updater.running:
+                    logger.info("Starting Telegram Bot updater polling...")
+                    await bot_app.updater.start_polling(drop_pending_updates=False, poll_interval=0.5)
+                    logger.info("Telegram Bot polling active and listening!")
+                await asyncio.sleep(4)
+            except Exception as e:
+                err_str = str(e)
+                if "Conflict" in err_str:
+                    logger.warning("Telegram polling conflict (old container still terminating). Retrying in 4s...")
+                else:
+                    logger.error(f"Polling supervisor error: {e}. Retrying in 4s...")
+                try:
+                    await bot_app.updater.stop()
+                except Exception:
+                    pass
+                await asyncio.sleep(4)
+
+    polling_task = asyncio.create_task(supervisor())
 
     yield
 
     logger.info("Shutting down Telegram Cloud PC service...")
-    await bot_app.updater.stop()
+    is_shutting_down = True
+    if polling_task:
+        polling_task.cancel()
+    try:
+        await bot_app.updater.stop()
+    except Exception:
+        pass
     await bot_app.stop()
     await bot_app.shutdown()
     logger.info("Shutdown complete.")
