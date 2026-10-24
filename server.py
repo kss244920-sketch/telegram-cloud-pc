@@ -58,7 +58,10 @@ async def lifespan(app: FastAPI):
                 for update in updates:
                     offset = update.update_id + 1
                     u_user = update.effective_user
-                    u_text = update.message.text if update.message else "(callback or file)"
+                    if update.message:
+                        u_text = update.message.text or update.message.caption or "(file or media)"
+                    else:
+                        u_text = "(callback or other)"
                     logger.info(f"Incoming Update #{update.update_id} from ID={u_user.id if u_user else 0} (@{u_user.username if u_user else 'None'}): {u_text[:40]}")
                     asyncio.create_task(bot_app.process_update(update))
             except Exception as e:
