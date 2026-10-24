@@ -260,6 +260,47 @@ async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ok, out = GitManager.auto_commit_and_push(pdir, "chore: manual sync from telegram bot")
     await update.message.reply_text(f"🔄 **Sync Status:** {out}")
 
+async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user):
+        return
+
+    has_key = bool(config.GEMINI_API_KEY)
+    key_status = "✅ Configured (Active)" if has_key else "❌ Not set"
+
+    text = (
+        "🔐 **Agy Authentication / Login Manager**\n\n"
+        f"• **API Key Status**: {key_status}\n\n"
+        "**Option 1: Gemini API Key (Sabse Aasan & Permanent)**\n"
+        "1. [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) par jaakar free API key banayein.\n"
+        "2. Chat mein command bhejein:\n"
+        "`/key AIzaSy...`\n"
+        "*(Bot aapki key ko save karke chat se delete kar dega taaki secure rahe)*.\n\n"
+        "**Option 2: Terminal Interactive Login**\n"
+        "Mini App Terminal khol kar wahan direct bash mein login chalayein."
+    )
+    await update.message.reply_text(mask_secrets(text), parse_mode="Markdown")
+
+async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user):
+        return
+
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("Usage: `/key AIzaSy...`", parse_mode="Markdown")
+        return
+
+    new_key = args[0].strip()
+    config.GEMINI_API_KEY = new_key
+    os.environ["GEMINI_API_KEY"] = new_key
+    state.save()
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    await update.effective_chat.send_message("✅ API Key successfully set ho gayi aur secure kar di gayi!")
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user):
         return
@@ -473,6 +514,8 @@ def create_bot_application() -> Application:
     app.add_handler(CommandHandler("zip", zip_command))
     app.add_handler(CommandHandler("undo", undo_command))
     app.add_handler(CommandHandler("sync", sync_command))
+    app.add_handler(CommandHandler("login", login_command))
+    app.add_handler(CommandHandler("key", key_command))
     app.add_handler(CommandHandler("help", help_command))
 
     # Callback Queries

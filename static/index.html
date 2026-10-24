@@ -390,14 +390,26 @@
 
     async function fetchStatus() {
       try {
-        const res = await fetch('/status');
+        const res = await fetch('/api/system-info');
         const data = await res.json();
-        document.getElementById('ramMetrics').innerText = `RAM: ${data.ram}`;
+        document.getElementById('ramMetrics').innerText = `RAM: ${data.ram} | CPU: ${data.cpu}`;
         document.getElementById('uptimeMetrics').innerText = `Uptime: ${data.uptime}`;
+        
+        const badge = document.getElementById('serviceStatus');
+        if (data.agy_installed) {
+          badge.innerText = `agy ${data.agy_version.split(' ')[0]}`;
+          badge.style.color = '#9ece6a';
+        } else {
+          badge.innerText = 'agy not found';
+          badge.style.color = '#f7768e';
+        }
       } catch(e) {}
     }
 
-    window.onload = initTerminal;
+    window.onload = () => {
+      initTerminal();
+      fetchStatus();
+    };
   </script>
 </body>
 </html>
