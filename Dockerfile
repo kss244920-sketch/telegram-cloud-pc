@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     ca-certificates \
     bash \
+    unzip \
+    zip \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Google Antigravity CLI (agy) directly into /usr/local/bin

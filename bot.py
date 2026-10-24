@@ -495,8 +495,12 @@ async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT
         )
     )
 
+    extra_note = ""
+    if saved_info.get("is_zip") and saved_info.get("unzip_info"):
+        extra_note = f" ({saved_info['unzip_info']} at inbox/extracted_{saved_path.stem})"
+
     state.add_to_buffer(
-        text=f"File inbox/{saved_info['name']}" + (f" (caption: {caption})" if caption else ""),
+        text=f"File inbox/{saved_info['name']}" + (f" (caption: {caption})" if caption else "") + extra_note,
         item_type="file",
         file_name=saved_info["name"],
         size_kb=saved_info["size_kb"]
