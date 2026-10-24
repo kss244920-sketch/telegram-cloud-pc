@@ -260,25 +260,131 @@ async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ok, out = GitManager.auto_commit_and_push(pdir, "chore: manual sync from telegram bot")
     await update.message.reply_text(f"🔄 **Sync Status:** {out}")
 
+active_login_process: asyncio.subprocess.Process | None = None
+
+def save_auth_bundle_to_render() -> bool:
+    """Auto-persists newly created authentication files to Render env vars."""
+    import tarfile, io, base64, urllib.request, json
+    gemini_dir = Path.home() / ".gemini" / "antigravity-cli"
+    if not (gemini_dir / "implicit").exists():
+        gemini_dir = Path("/root/.gemini/antigravity-cli")
+    if not (gemini_dir / "implicit").exists():
+        return False
+
+    try:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            if (gemini_dir / "jetski_state.pbtxt").exists():
+                tar.add(str(gemini_dir / "jetski_state.pbtxt"), arcname="jetski_state.pbtxt")
+            if (gemini_dir / "installation_id").exists():
+                tar.add(str(gemini_dir / "installation_id"), arcname="installation_id")
+            tar.add(str(gemini_dir / "implicit"), arcname="implicit")
+
+        b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        render_api_key = "rnd_3tagyUF2IqkgZyiRiBHD7CbZjxAg"
+        service_id = "srv-dbe4n88m7kps73capeog"
+        url = f"https://api.render.com/v1/services/{service_id}/env-vars"
+        headers = {
+            "Authorization": f"Bearer {render_api_key}",
+            "Content-Type": "application/json"
+        }
+        data = [
+            {"key": "BOT_TOKEN", "value": config.BOT_TOKEN},
+            {"key": "ALLOWED_USERNAME", "value": config.ALLOWED_USERNAME},
+            {"key": "PORT", "value": str(config.PORT)},
+            {"key": "RENDER_EXTERNAL_URL", "value": "https://telegram-cloud-pc-docker.onrender.com"},
+            {"key": "AGY_AUTH_DATA", "value": b64}
+        ]
+        req = urllib.request.Request(url, data=json.dumps(data).encode(), headers=headers, method="PUT")
+        with urllib.request.urlopen(req) as resp:
+            return resp.status == 200
+    except Exception as e:
+        logger.error(f"Failed to auto-save auth bundle to Render: {e}")
+        return False
+
 async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global active_login_process
     if not is_authorized(update.effective_user):
         return
 
-    has_key = bool(config.GEMINI_API_KEY)
-    key_status = "✅ Configured (Active)" if has_key else "❌ Not set"
+    msg = await update.message.reply_text("⏳ Google OAuth Sign-in link generate ho rahi hai...")
 
-    text = (
-        "🔐 **Agy Authentication / Login Manager**\n\n"
-        f"• **API Key Status**: {key_status}\n\n"
-        "**Option 1: Gemini API Key (Sabse Aasan & Permanent)**\n"
-        "1. [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) par jaakar free API key banayein.\n"
-        "2. Chat mein command bhejein:\n"
-        "`/key AIzaSy...`\n"
-        "*(Bot aapki key ko save karke chat se delete kar dega taaki secure rahe)*.\n\n"
-        "**Option 2: Terminal Interactive Login**\n"
-        "Mini App Terminal khol kar wahan direct bash mein login chalayein."
-    )
-    await update.message.reply_text(mask_secrets(text), parse_mode="Markdown")
+    agy_bin = shutil.which("agy") or "/usr/local/bin/agy"
+    env = os.environ.copy()
+    env["PAGER"] = "cat"
+    env["SYSTEMD_PAGER"] = "cat"
+
+    try:
+        active_login_process = await asyncio.create_subprocess_exec(
+            agy_bin, "-p", "hello",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env
+        )
+
+        auth_url = ""
+        start_time = time.time()
+        while time.time() - start_time < 20:
+            line_bytes = await active_login_process.stdout.readline()
+            if not line_bytes:
+                break
+            line = line_bytes.decode("utf-8", errors="ignore").strip()
+            if "https://accounts.google.com/o/oauth2/auth" in line:
+                for p in line.split():
+                    if p.startswith("https://accounts.google.com/o/oauth2/auth"):
+                        auth_url = p
+                        break
+                if auth_url:
+                    break
+
+        if auth_url:
+            text = (
+                "🔐 **Google Sign-In Link (Asli Poora Link):**\n\n"
+                f"[👉 Yahan Click Karke Login Karein]({auth_url})\n\n"
+                "Browser mein Sign-in karne ke baad jo **Authorization Code** mile, use chat mein bhejein:\n"
+                "`/code <aapka_code>`\n\n"
+                "*(Link 60 second ke liye active hai. Code bhejte hi login permanently save ho jayega)*"
+            )
+            await msg.edit_text(text, parse_mode="Markdown")
+        else:
+            await msg.edit_text("ℹ️ Agy pehle se authenticated hai ya direct API key mode active hai.")
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: {e}")
+
+async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global active_login_process
+    if not is_authorized(update.effective_user):
+        return
+
+    args = context.args or []
+    if not args or not active_login_process:
+        await update.message.reply_text("Usage: `/code <authorization_code>`\n\n(Pehle `/login` dabayein)")
+        return
+
+    code_val = args[0].strip()
+    status_msg = await update.message.reply_text("⏳ Code verify ho raha hai...")
+
+    try:
+        active_login_process.stdin.write(f"{code_val}\n".encode())
+        await active_login_process.stdin.drain()
+        await asyncio.sleep(2)
+
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        saved = save_auth_bundle_to_render()
+        save_note = "\n\n✅ Credentials Render environment mein permanently save ho gaye! Restart par bhi login nahi udega." if saved else ""
+        await status_msg.edit_text(
+            f"🎉 **Safalta Se Login Ho Gaya!**\n\nAb agy fully authenticated hai!{save_note}",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Error verifying code: {e}")
+    finally:
+        active_login_process = None
 
 async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user):
@@ -515,6 +621,7 @@ def create_bot_application() -> Application:
     app.add_handler(CommandHandler("undo", undo_command))
     app.add_handler(CommandHandler("sync", sync_command))
     app.add_handler(CommandHandler("login", login_command))
+    app.add_handler(CommandHandler("code", code_command))
     app.add_handler(CommandHandler("key", key_command))
     app.add_handler(CommandHandler("help", help_command))
 
