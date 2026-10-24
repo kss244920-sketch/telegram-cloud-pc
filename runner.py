@@ -53,20 +53,22 @@ class AgyRunner:
         agy_bin = self.find_agy_binary()
         
         # Output lines buffer
-        display_lines: list[str] = [f"🚀 Task shuru hua: `{prompt[:60]}`"]
+        display_lines: list[str] = [f"🚀 Task shuru hua: `{prompt[:50]}`"]
         last_edit_time = 0.0
         lock = asyncio.Lock()
 
         async def update_telegram(final=False):
             nonlocal last_edit_time
             now = time.time()
-            if not final and (now - last_edit_time) < 2.5:
+            if not final and (now - last_edit_time) < 2.0:
                 return
 
             last_edit_time = now
-            text = "\n".join(display_lines[-15:])  # Show last 15 actions
-            if len(text) > 3500:
-                text = text[-3500:]
+            # Strict rolling window: only show the latest 10 events
+            events_to_show = display_lines[-10:]
+            header = f"💻 `agy terminal` [{conversation_id[:8] if conversation_id else 'session'}]\n" + "─" * 30
+            body = "\n".join(events_to_show)
+            text = f"{header}\n{body}"
 
             masked = mask_secrets(text)
             try:
@@ -165,20 +167,20 @@ class AgyRunner:
                             dur = su.get("duration_seconds", 0)
                             delta = su.get("text_delta", "")
                             if dur > 0:
-                                display_lines.append(f"🧠 Soch raha hai... ({int(dur)}s)")
+                                display_lines.append(f"🧠 Thought ({int(dur)}s)")
                             elif delta and "\n" in delta:
                                 display_lines.append(f"💭 {delta.strip()[:60]}")
                                 
                         elif stype == "tool":
                             tool_name = su.get("tool_name", "")
                             params = su.get("tool_info", {}).get("parameters", {})
-                            state = su.get("state")
+                            tstate = su.get("state")
                             
                             if tool_name == "run_command":
-                                cl = params.get("CommandLine", "")[:50]
-                                if state == "ACTIVE":
-                                    display_lines.append(f"💻 Bash: `{cl}`")
-                                elif state == "DONE":
+                                cl = params.get("CommandLine", "")[:45]
+                                if tstate == "ACTIVE":
+                                    display_lines.append(f"⚡ Bash: `{cl}`")
+                                elif tstate == "DONE":
                                     display_lines.append(f"✅ Bash complete: `{cl}`")
                             elif tool_name in ["read_file", "view_file"]:
                                 p = params.get("Path", "")
@@ -187,8 +189,10 @@ class AgyRunner:
                                 p = params.get("Path", "")
                                 display_lines.append(f"✏️ Edit: `{os.path.basename(p)}`")
                             elif tool_name == "search_web":
-                                q = params.get("query", "")[:40]
+                                q = params.get("query", "")[:35]
                                 display_lines.append(f"🌐 Search: `{q}`")
+                            else:
+                                display_lines.append(f"🔧 Tool: `{tool_name}`")
                                 
                         await update_telegram()
                         
@@ -197,9 +201,8 @@ class AgyRunner:
                         final_response = res.get("response", "")
                         
                 except json.JSONDecodeError:
-                    # Non-json line
                     if len(line_str) > 0 and not line_str.startswith("{"):
-                        display_lines.append(f"ℹ️ {line_str[:60]}")
+                        display_lines.append(f"ℹ️ {line_str[:55]}")
                         await update_telegram()
 
             await self.current_process.wait()
@@ -207,7 +210,7 @@ class AgyRunner:
 
             elapsed_sec = int(time.time() - start_time)
             mins, secs = divmod(elapsed_sec, 60)
-            time_str = f"{mins} min {secs} sec" if mins > 0 else f"{secs} sec"
+            time_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
 
             if self.cancel_requested:
                 display_lines.append("🛑 Kaam user ne rok diya (/stop).")
@@ -215,12 +218,25 @@ class AgyRunner:
                 return {"status": "stopped", "time": time_str}
 
             if return_code == 0:
-                display_lines.append(f"🎉 Kaam complete hua! ({time_str})")
+                display_lines.append(f"✅ Finished in {time_str}")
                 await update_telegram(final=True)
                 
                 # Auto commit & push if successful
                 commit_ok, commit_msg = GitManager.auto_commit_and_push(project_dir, prompt[:50])
-                
+
+                # Backup workspace snapshot to Telegram Storage Channel
+                try:
+                    from storage_manager import storage_manager
+                    asyncio.create_task(
+                        storage_manager.backup_workspace_snapshot(
+                            bot=bot,
+                            project_dir=project_dir,
+                            tag=conversation_id[:8] if conversation_id else "task"
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"Storage channel snapshot failed: {e}")
+
                 return {
                     "status": "success",
                     "time": time_str,

@@ -24,6 +24,12 @@ PORT = int(os.getenv("PORT", "8000"))
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
+_channel_id_raw = os.getenv("STORAGE_CHANNEL_ID", "-1004343308436").strip()
+try:
+    STORAGE_CHANNEL_ID = int(_channel_id_raw)
+except ValueError:
+    STORAGE_CHANNEL_ID = -1004343308436
+
 def set_allowed_user_id(user_id: int):
     """Dynamically locks the allowed numerical ID once user @OwAtom messages the bot."""
     global ALLOWED_USER_ID

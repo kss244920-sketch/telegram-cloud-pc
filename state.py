@@ -10,20 +10,32 @@ STATE_FILE = config.DATA_DIR / "state.json"
 
 class StateManager:
     def __init__(self):
-        self.mode = "chat"  # 'chat' (txt-to-txt), 'queue' (batch tasks), or 'instant'
+        self.mode = "terminal"
         self.current_project = "default"
         self.auto_push = True
         self.active_conversation_id = str(uuid.uuid4())
         self.conversations = {}
-        self.queue = []
+        self.prompt_buffer = []  # list of items waiting for Proceed
+        self.buffer_message_id: int | None = None
         self.history = []
-        self.chat_history = {}  # conv_id -> [{"role": "user"|"model", "text": "...", "timestamp": "..."}]
         self.last_terminal_output = ""
         self.was_restarted = False
         
         self.load()
         if not self.conversations:
             self.new_conversation(title="Default Session")
+
+    def add_to_buffer(self, text: str, item_type: str = "text", file_name: str | None = None, size_kb: float | None = None):
+        self.prompt_buffer.append({
+            "text": text,
+            "type": item_type,
+            "file_name": file_name,
+            "size_kb": size_kb
+        })
+
+    def clear_buffer(self):
+        self.prompt_buffer.clear()
+        self.buffer_message_id = None
 
     def add_chat_message(self, conv_id: str, role: str, text: str):
         if conv_id not in self.chat_history:

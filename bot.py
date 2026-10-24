@@ -5,8 +5,7 @@ import shutil
 import asyncio
 import psutil
 from pathlib import Path
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, ReplyKeyboardMarkup, KeyboardButton
-from telegram.constants import ChatAction
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -21,17 +20,13 @@ import config
 from security import is_authorized, mask_secrets
 from state import state
 from runner import runner
-from queue_manager import queue_manager
 from file_manager import FileManager
 from git_manager import GitManager
-from chat_service import chat_service
+from storage_manager import storage_manager
 
 logger = logging.getLogger("telegram_bot")
 START_TIME = time.time()
-
-def get_mini_app_url() -> str:
-    base = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-cloud-pc.onrender.com")
-    return base.rstrip("/")
+active_login_process = None
 
 def get_uptime_string() -> str:
     elapsed = int(time.time() - START_TIME)
@@ -54,14 +49,23 @@ def get_memory_info() -> tuple[int, int, float]:
     except Exception:
         return 0, 512, 0.0
 
-def get_main_keyboard(mini_app_url: str) -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        [
-            [KeyboardButton("💬 Chat Mode (Txt)"), KeyboardButton("📋 Queue Mode (Tasks)")],
-            [KeyboardButton("📱 Open Mini App", web_app=WebAppInfo(url=mini_app_url)), KeyboardButton("📊 System Status")]
-        ],
-        resize_keyboard=True
-    )
+def render_buffer_text_and_markup() -> tuple[str | None, InlineKeyboardMarkup | None]:
+    if not state.prompt_buffer:
+        return None, None
+
+    count = len(state.prompt_buffer)
+    lines = [f"📥 **Input Buffer ({count} item{'s' if count > 1 else ''}):**"]
+    for i, item in enumerate(state.prompt_buffer, 1):
+        if item.get("type") == "file":
+            lines.append(f"{i}. 📄 `{item['file_name']}` ({item.get('size_kb', 0)} KB)")
+        else:
+            lines.append(f"{i}. \"{item['text'][:80]}\"")
+
+    lines.append("\n_Aur messages/files bhejein, ya neeche Proceed karein:_")
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("▶️ PROCEED", callback_data="run_proceed")]
+    ])
+    return "\n".join(lines), markup
 
 # ----------------- Command Handlers -----------------
 
@@ -70,222 +74,69 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     active_id = state.active_conversation_id
-    active_conv = state.conversations.get(active_id, {})
-    conv_title = active_conv.get("title", "Default Session")
-    mini_app_url = get_mini_app_url()
-
-    keyboard = [
-        [
-            InlineKeyboardButton("💬 Chat Mode (Txt)", callback_data="switch_mode:chat"),
-            InlineKeyboardButton("📋 Queue Mode (Tasks)", callback_data="switch_mode:queue")
-        ],
-        [InlineKeyboardButton("📱 Open Mini App (Terminal & Chat)", web_app=WebAppInfo(url=mini_app_url))],
-        [
-            InlineKeyboardButton("📊 System Status", callback_data="open_status"),
-            InlineKeyboardButton("📁 Files Browser", callback_data="open_files")
-        ]
-    ]
-
-    restart_msg = "\n_🔔 Server restart ke baad wapas aa gaya, sab safe hai!_\n" if state.was_restarted else ""
-
     text = (
-        f"👋 **Namaste! Cloud PC Remote Bot Active Hai!**\n{restart_msg}\n"
-        "Main aapka personal remote AI assistant hoon jo Render cloud server par chalta hai.\n\n"
-        f"⚙️ **System Config:**\n"
+        "💻 **Cloud PC Terminal Active!**\n\n"
         f"• **Owner**: @{config.ALLOWED_USERNAME} (Verified Lock ✅)\n"
-        f"• **Current Mode**: `{state.mode.upper()}`\n"
-        f"• **Active Session**: {conv_title}\n"
-        f"• **Auto-Allow**: ON (Bina permission maange fast execution)\n\n"
-        "💡 **Kaise use karein:**\n"
-        "1. 💬 **Chat Mode (Txt-to-Txt)**: Normal baatein karein, sawal puchiye, code explain karwayein. Turant direct text reply milega!\n"
-        "2. 📋 **Queue Mode (Tasks)**: Coding aur repo ke kaam list mein jodiye aur [PROCEED] se run karein.\n"
-        "3. 📱 **Mini App**: Terminal, Chat tab, Queue, aur Files browser phone par full screen kholein!\n\n"
-        "👇 _Neeche keyboard ya buttons se mode switch karein ya seedha message type karein:_"
+        f"• **Active Session**: `{active_id[:8]}`\n"
+        f"• **Storage Node**: `{config.STORAGE_CHANNEL_ID}` (Connected ✅)\n\n"
+        "👉 **Kaise use karein:**\n"
+        "1. Chat mein koi bhi prompt, instruction ya files bhein.\n"
+        "2. Multiple baatein bhejne ke baad neeche **[▶️ PROCEED]** dabayein.\n"
+        "3. Live 10-events rolling terminal screen chalegi aur final answer aayega.\n\n"
+        "Commands: `/session`, `/new`, `/stop`, `/login`, `/key`, `/get <file>`, `/backup`"
     )
+    # Remove any leftover reply keyboard
     await update.message.reply_text(
         mask_secrets(text),
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        reply_markup=ReplyKeyboardRemove(),
         parse_mode="Markdown"
     )
-    # Also attach persistent reply keyboard
-    await update.message.reply_text(
-        "⚡ Quick Menu keyboard ready hai:",
-        reply_markup=get_main_keyboard(mini_app_url)
-    )
 
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def session_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user):
         return
 
     used_mb, total_mb, cpu = get_memory_info()
-    uptime_str = get_uptime_string()
-    active_id = state.active_conversation_id
-    active_conv = state.conversations.get(active_id, {})
-    conv_title = active_conv.get("title", "Default Session")
-    mini_app_url = get_mini_app_url()
-
-    keyboard = [
-        [InlineKeyboardButton("📟 Terminal Kholo", web_app=WebAppInfo(url=mini_app_url))],
-    ]
-
     text = (
-        "📊 **Cloud PC Status**\n\n"
-        "• **Server**: Render Free Web Service (Online ✅)\n"
-        f"• **RAM Usage**: {used_mb} MB / {total_mb} MB\n"
-        f"• **CPU**: {cpu}%\n"
-        f"• **Uptime**: {uptime_str}\n"
-        f"• **Active Session**: {conv_title} (`{active_id[:8]}`)\n"
-        f"• **Queue Items**: {len(state.queue)} bache hain\n"
-        f"• **Mode**: `{state.mode}`\n"
-        "• **Health Check**: `/health` (Alive)\n"
+        "💻 **Terminal Session Info**\n\n"
+        f"• **Session ID**: `{state.active_conversation_id}`\n"
+        f"• **Project**: `{state.current_project}`\n"
+        f"• **Storage Channel**: `{config.STORAGE_CHANNEL_ID}` (Active)\n"
+        f"• **RAM**: {used_mb}MB / {total_mb}MB | CPU: {cpu}%\n"
+        f"• **Uptime**: {get_uptime_string()}"
     )
-    await update.message.reply_text(
-        mask_secrets(text),
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(text, parse_mode="Markdown")
 
-async def queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user):
         return
 
-    text, markup = queue_manager.build_queue_text_and_markup()
-    await update.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+    new_id = state.new_conversation()
+    state.clear_buffer()
+    await update.message.reply_text(f"✨ Naya agy session start hua: `{new_id[:8]}`", parse_mode="Markdown")
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user):
         return
 
     if runner.is_running:
-        stopped = runner.stop_current_task()
-        if stopped:
-            await update.message.reply_text("🛑 Chal raha kaam rokne ka signal bhej diya gaya hai!")
-        else:
-            await update.message.reply_text("⚠️ Process rokne mein problem aayi.")
+        runner.stop_current_task()
+        await update.message.reply_text("🛑 Current process ko terminate kiya ja raha hai...")
     else:
-        await update.message.reply_text("ℹ️ Abhi koi kaam nahi chal raha.")
+        state.clear_buffer()
+        await update.message.reply_text("ℹ️ Koi process active nahi hai. Input buffer reset ho gaya.")
 
-async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user):
         return
 
-    args = context.args or []
-    custom_title = " ".join(args).strip() if args else None
-    new_id = state.new_conversation(title=custom_title)
-    conv = state.conversations[new_id]
-
-    text = (
-        "✨ **Naya Conversation Shuru Ho Gaya!**\n\n"
-        f"• **Title**: {conv['title']}\n"
-        f"• **ID**: `{new_id[:8]}...`\n\n"
-        "Aapka purana kaam safe hai. Sessions dekhne ke liye `/conversations` dabayein."
-    )
-    await update.message.reply_text(mask_secrets(text), parse_mode="Markdown")
-
-async def conversations_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
-        return
-
-    convs = state.list_conversations()
-    buttons = []
-    text_lines = ["🗂️ **Aapke Saved Conversations:**\n"]
-
-    for c in convs:
-        is_active = (c["id"] == state.active_conversation_id)
-        indicator = "🟢 (Active)" if is_active else ""
-        text_lines.append(f"• **{c['title']}** `{c['id'][:8]}` {indicator}")
-        if not is_active:
-            buttons.append([
-                InlineKeyboardButton(
-                    f"👉 Switch to: {c['title'][:20]}",
-                    callback_data=f"switch_conv:{c['id']}"
-                )
-            ])
-
-    buttons.append([InlineKeyboardButton("➕ Naya Conversation", callback_data="new_conv")])
-    reply_markup = InlineKeyboardMarkup(buttons)
-    await update.message.reply_text("\n".join(text_lines), reply_markup=reply_markup, parse_mode="Markdown")
-
-async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
-        return
-
-    args = context.args or []
-    mini_app_url = get_mini_app_url()
-    if args and args[0].lower() in ["chat", "queue", "instant"]:
-        state.mode = args[0].lower()
-        state.save()
-        await update.message.reply_text(
-            f"✅ Mode badal kar `{state.mode.upper()}` kar diya gaya hai.",
-            reply_markup=get_main_keyboard(mini_app_url)
-        )
-    else:
-        keyboard = [
-            [
-                InlineKeyboardButton("💬 Chat (Txt-to-Txt)", callback_data="switch_mode:chat"),
-                InlineKeyboardButton("📋 Queue (Tasks)", callback_data="switch_mode:queue")
-            ],
-            [
-                InlineKeyboardButton("⚡ Instant Mode", callback_data="switch_mode:instant")
-            ]
-        ]
-        await update.message.reply_text(
-            f"ℹ️ **Current Mode**: `{state.mode.upper()}`\n\nNeeche se apna pasandida mode select karein:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-
-async def chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Force direct conversational response regardless of active mode."""
-    if not is_authorized(update.effective_user):
-        return
-
-    text = " ".join(context.args or []).strip()
-    if not text:
-        await update.message.reply_text("Usage: `/chat <aapka sawal/prompt>`\nYa direct baatein karne ke liye `💬 Chat Mode (Txt)` switch karein.")
-        return
-
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    msg = await update.message.reply_text("⏳ Workspace snapshot Telegram storage channel par upload ho raha hai...")
     pdir = state.get_project_dir()
-    reply = await chat_service.generate_reply(prompt=text, conv_id=state.active_conversation_id, project_dir=pdir)
-    masked = mask_secrets(reply)
-
-    mini_app_url = get_mini_app_url()
-    kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📋 Switch to Queue", callback_data="switch_mode:queue"),
-            InlineKeyboardButton("📱 Mini App", web_app=WebAppInfo(url=mini_app_url))
-        ]
-    ])
-    try:
-        await update.message.reply_text(masked, reply_markup=kb, parse_mode="Markdown")
-    except Exception:
-        await update.message.reply_text(masked, reply_markup=kb)
-
-async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Force add task item to queue regardless of active mode."""
-    if not is_authorized(update.effective_user):
-        return
-
-    text = " ".join(context.args or []).strip()
-    if not text:
-        await update.message.reply_text("Usage: `/task <kaam ki description>`")
-        return
-
-    res = queue_manager.add_item(title=text, item_type="text")
-    if res.get("is_next_round"):
-        await update.message.reply_text(f"⏳ Kaam chal raha hai, item Agle Round mein jod diya gaya: \"{text[:40]}\"")
+    ok = await storage_manager.backup_workspace_snapshot(context.bot, pdir, tag="manual")
+    if ok:
+        await msg.edit_text(f"✅ Workspace snapshot Channel `{config.STORAGE_CHANNEL_ID}` par upload ho gaya!")
     else:
-        q_text, markup = queue_manager.build_queue_text_and_markup()
-        await update.message.reply_text(f"➕ Task queue mein jud gaya:\n\n{q_text}", reply_markup=markup, parse_mode="Markdown")
-
-async def files_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
-        return
-
-    pdir = state.get_project_dir()
-    header, markup = FileManager.build_file_browser(pdir)
-    await update.message.reply_text(header, reply_markup=markup, parse_mode="Markdown")
+        await msg.edit_text("❌ Snapshot backup fail ho gaya.")
 
 async def get_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user):
@@ -303,88 +154,52 @@ async def get_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if target.exists() and target.is_file():
         await update.message.reply_document(document=open(target, "rb"), caption=f"📄 {target.name}")
     else:
-        # Search recursively
         matches = list(pdir.rglob(fname))
         if matches and matches[0].is_file():
             await update.message.reply_document(document=open(matches[0], "rb"), caption=f"📄 {matches[0].name}")
         else:
-            await update.message.reply_text(f"❌ File '{fname}' nahi mili.")
+            await update.message.reply_text(f"❌ File `{fname}` nahi mili.")
 
-async def zip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
-        return
-
-    msg = await update.message.reply_text("📦 Project ki zip ban rahi hai...")
-    pdir = state.get_project_dir()
-    try:
-        zip_p = FileManager.create_project_zip(pdir)
-        await update.message.reply_document(
-            document=open(zip_p, "rb"),
-            caption=f"📦 {zip_p.name} ({zip_p.stat().st_size // 1024} KB)"
-        )
-        await msg.delete()
-    except Exception as e:
-        await msg.edit_text(f"❌ Zip banane mein error: {e}")
-
-async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
-        return
-
-    pdir = state.get_project_dir()
-    ok, out = GitManager.undo_last_checkpoint(pdir)
-    if ok:
-        await update.message.reply_text(f"⏪ **Undo Successful!**\n{out}")
-    else:
-        await update.message.reply_text(f"❌ {out}")
-
-async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user):
-        return
-
-    pdir = state.get_project_dir()
-    ok, out = GitManager.auto_commit_and_push(pdir, "chore: manual sync from telegram bot")
-    await update.message.reply_text(f"🔄 **Sync Status:** {out}")
-
-active_login_process: asyncio.subprocess.Process | None = None
+# ----------------- Auth Commands -----------------
 
 def save_auth_bundle_to_render() -> bool:
-    """Auto-persists newly created authentication files to Render env vars."""
-    import tarfile, io, base64, urllib.request, json
-    gemini_dir = Path.home() / ".gemini" / "antigravity-cli"
-    if not (gemini_dir / "implicit").exists():
-        gemini_dir = Path("/root/.gemini/antigravity-cli")
-    if not (gemini_dir / "implicit").exists():
-        return False
-
     try:
+        import tarfile, io, base64, urllib.request, json
+        cred_dir = Path.home() / ".gemini" / "antigravity-cli"
+        if not cred_dir.exists():
+            return False
+
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            if (gemini_dir / "jetski_state.pbtxt").exists():
-                tar.add(str(gemini_dir / "jetski_state.pbtxt"), arcname="jetski_state.pbtxt")
-            if (gemini_dir / "installation_id").exists():
-                tar.add(str(gemini_dir / "installation_id"), arcname="installation_id")
-            tar.add(str(gemini_dir / "implicit"), arcname="implicit")
+            tar.add(str(cred_dir), arcname=".")
+        buf.seek(0)
+        b64_str = base64.b64encode(buf.read()).decode("utf-8")
 
-        b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-        render_api_key = "rnd_3tagyUF2IqkgZyiRiBHD7CbZjxAg"
-        service_id = "srv-dbe4n88m7kps73capeog"
-        url = f"https://api.render.com/v1/services/{service_id}/env-vars"
-        headers = {
-            "Authorization": f"Bearer {render_api_key}",
-            "Content-Type": "application/json"
-        }
-        data = [
-            {"key": "BOT_TOKEN", "value": config.BOT_TOKEN},
-            {"key": "ALLOWED_USERNAME", "value": config.ALLOWED_USERNAME},
-            {"key": "PORT", "value": str(config.PORT)},
-            {"key": "RENDER_EXTERNAL_URL", "value": "https://telegram-cloud-pc-docker.onrender.com"},
-            {"key": "AGY_AUTH_DATA", "value": b64}
-        ]
-        req = urllib.request.Request(url, data=json.dumps(data).encode(), headers=headers, method="PUT")
-        with urllib.request.urlopen(req) as resp:
-            return resp.status == 200
+        render_api_key = os.getenv("RENDER_API_KEY", "rnd_3tagyUF2IqkgZyiRiBHD7CbZjxAg")
+        render_service_id = os.getenv("RENDER_SERVICE_ID", "srv-dbe4n88m7kps73capeog")
+
+        url = f"https://api.render.com/v1/services/{render_service_id}/env-vars/AGY_AUTH_DATA"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"value": b64_str}).encode("utf-8"),
+            headers={"Authorization": f"Bearer {render_api_key}", "Content-Type": "application/json"},
+            method="PUT"
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status in (200, 201)
+        except Exception:
+            post_url = f"https://api.render.com/v1/services/{render_service_id}/env-vars"
+            req2 = urllib.request.Request(
+                post_url,
+                data=json.dumps([{"key": "AGY_AUTH_DATA", "value": b64_str}]).encode("utf-8"),
+                headers={"Authorization": f"Bearer {render_api_key}", "Content-Type": "application/json"},
+                method="PUT"
+            )
+            with urllib.request.urlopen(req2) as resp2:
+                return resp2.status in (200, 201)
     except Exception as e:
-        logger.error(f"Failed to auto-save auth bundle to Render: {e}")
+        logger.error(f"Failed to save auth bundle to Render: {e}")
         return False
 
 async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -425,11 +240,10 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if auth_url:
             text = (
-                "🔐 **Google Sign-In Link (Asli Poora Link):**\n\n"
+                "🔐 **Google Sign-In Link (Click karein):**\n\n"
                 f"[👉 Yahan Click Karke Login Karein]({auth_url})\n\n"
-                "Browser mein Sign-in karne ke baad jo **Authorization Code** mile, use chat mein bhejein:\n"
-                "`/code <aapka_code>`\n\n"
-                "*(Link 60 second ke liye active hai. Code bhejte hi login permanently save ho jayega)*"
+                "Browser mein sign-in ke baad jo **Authorization Code** mile, use bhejein:\n"
+                "`/code <aapka_code>`"
             )
             await msg.edit_text(text, parse_mode="Markdown")
         else:
@@ -444,7 +258,7 @@ async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args = context.args or []
     if not args or not active_login_process:
-        await update.message.reply_text("Usage: `/code <authorization_code>`\n\n(Pehle `/login` dabayein)")
+        await update.message.reply_text("Usage: `/code <authorization_code>`\n\n(Pehle `/login` karein)")
         return
 
     code_val = args[0].strip()
@@ -461,15 +275,11 @@ async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
         saved = save_auth_bundle_to_render()
-        save_note = "\n\n✅ Credentials Render environment mein permanently save ho gaye! Restart par bhi login nahi udega." if saved else ""
-        await status_msg.edit_text(
-            f"🎉 **Safalta Se Login Ho Gaya!**\n\nAb agy fully authenticated hai!{save_note}",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Error verifying code: {e}")
-    finally:
+        save_note = "\n\n✅ Credentials Render environment mein permanently save ho gaye!" if saved else ""
+        await status_msg.edit_text(f"✅ Login successfully complete ho gaya!{save_note}")
         active_login_process = None
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Verification failed: {e}")
 
 async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user):
@@ -497,21 +307,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = (
-        "📖 **Commands Guide (Simple Hinglish):**\n\n"
-        "• `/start` - Bot status aur Terminal button\n"
-        "• `/queue` - Kaam ki list dekhein aur PROCEED dabayein\n"
-        "• `/stop` - Chal raha task turant rokein\n"
-        "• `/status` - Server RAM, CPU aur uptime dekhein\n"
-        "• `/new <naam>` - Naya session/conversation shuru karein\n"
-        "• `/conversations` - Saved conversations switch karein\n"
-        "• `/files` - Files browser kholein\n"
-        "• `/get <file>` - Kisi file ko chat mein mangwayein\n"
-        "• `/zip` - Pura project zip download karein\n"
-        "• `/undo` - Aakhri checkpoint par wapas jayein\n"
-        "• `/sync` - GitHub par push karein\n"
-        "• `/mode` - Instant ya Queue mode chunein\n"
+        "📖 **Cloud PC Commands:**\n\n"
+        "• `/start` : Bot status aur instructions\n"
+        "• `/session` : Current session info\n"
+        "• `/new` : Fresh conversation session start karein\n"
+        "• `/stop` : Chal rahe process ko rokein\n"
+        "• `/get <file>` : Workspace ki file chat mein maangein\n"
+        "• `/backup` : Workspace snapshot storage channel par upload karein\n"
+        "• `/login` & `/code` : Google OAuth login\n"
+        "• `/key <API_KEY>` : Gemini API Key set karein\n\n"
+        "💡 **Chat Execution:** Chat mein messages/files bhein, aur **[▶️ PROCEED]** dabayein!"
     )
-    await update.message.reply_text(mask_secrets(text), parse_mode="Markdown")
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 # ----------------- Message & File Handlers -----------------
 
@@ -523,96 +330,35 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not text:
         return
 
-    pdir = state.get_project_dir()
-    mini_app_url = get_mini_app_url()
-
-    # 1. Handle Persistent Keyboard Button Clicks
-    if text in ["💬 Chat Mode (Txt)", "/mode chat"]:
-        state.mode = "chat"
-        state.save()
-        await update.message.reply_text(
-            "💬 **Chat Mode (Txt-to-Txt) Active!**\n\nAb aap jo bhi likhenge, AI seedha direct text reply karega (bina kisi queue ya git commit ke). Puchhiye koi bhi sawal!",
-            reply_markup=get_main_keyboard(mini_app_url),
-            parse_mode="Markdown"
-        )
+    if runner.is_running:
+        await update.message.reply_text("⏳ Ek process terminal mein chal raha hai. /stop se rok sakte hain.")
         return
 
-    if text in ["📋 Queue Mode (Tasks)", "/mode queue"]:
-        state.mode = "queue"
-        state.save()
-        q_text, markup = queue_manager.build_queue_text_and_markup()
-        await update.message.reply_text(
-            f"📋 **Queue Mode (Batch Tasks) Active!**\n\nAb aapke messages aur files kaam ki list mein judenge aur **[PROCEED]** dabane par run honge.\n\n{q_text}",
-            reply_markup=markup,
-            parse_mode="Markdown"
-        )
-        return
+    state.add_to_buffer(text, item_type="text")
+    buf_text, markup = render_buffer_text_and_markup()
 
-    if text in ["📊 System Status", "/status"]:
-        await status_command(update, context)
-        return
+    if state.buffer_message_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=state.buffer_message_id,
+                text=buf_text,
+                reply_markup=markup,
+                parse_mode="Markdown"
+            )
+            return
+        except Exception:
+            pass
 
-    if text in ["📱 Open Mini App", "📟 Open Mini App"]:
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📱 Open Cloud PC Mini App", web_app=WebAppInfo(url=mini_app_url))]
-        ])
-        await update.message.reply_text("📱 Mini app kholne ke liye neeche button dabayein:", reply_markup=kb)
-        return
-
-    # 2. Branch by Active Mode
-    if state.mode == "chat":
-        # Direct Text-to-Text Conversation
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-        reply = await chat_service.generate_reply(
-            prompt=text,
-            conv_id=state.active_conversation_id,
-            project_dir=pdir
-        )
-        masked_reply = mask_secrets(reply)
-        kb = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("📋 Switch to Queue", callback_data="switch_mode:queue"),
-                InlineKeyboardButton("📱 Mini App", web_app=WebAppInfo(url=mini_app_url))
-            ]
-        ])
-
-        if len(masked_reply) > 4000:
-            chunks = [masked_reply[i:i+4000] for i in range(0, len(masked_reply), 4000)]
-            for i, chunk in enumerate(chunks):
-                is_last = (i == len(chunks) - 1)
-                cur_kb = kb if is_last else None
-                try:
-                    await update.message.reply_text(chunk, reply_markup=cur_kb, parse_mode="Markdown")
-                except Exception:
-                    await update.message.reply_text(chunk, reply_markup=cur_kb)
-        else:
-            try:
-                await update.message.reply_text(masked_reply, reply_markup=kb, parse_mode="Markdown")
-            except Exception:
-                await update.message.reply_text(masked_reply, reply_markup=kb)
-
-    elif state.mode == "instant":
-        # Run immediately on workspace with agy
-        status_msg = await update.message.reply_text("⚡ Instant mode: Kaam shuru ho raha hai...")
-        await runner.run_task(
-            prompt=text,
-            project_dir=pdir,
-            bot=context.bot,
-            chat_id=update.effective_chat.id,
-            live_message_id=status_msg.message_id,
-            conversation_id=state.active_conversation_id
-        )
-    else:
-        # Default: Add to task queue
-        res = queue_manager.add_item(title=text, item_type="text")
-        if res.get("is_next_round"):
-            await update.message.reply_text(f"⏳ Kaam chal raha hai, isliye ye item **Agle Round** mein jod diya gaya: \"{text[:40]}\"")
-        else:
-            q_text, markup = queue_manager.build_queue_text_and_markup()
-            await update.message.reply_text(q_text, reply_markup=markup, parse_mode="Markdown")
+    msg = await update.message.reply_text(buf_text, reply_markup=markup, parse_mode="Markdown")
+    state.buffer_message_id = msg.message_id
 
 async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user):
+        return
+
+    if runner.is_running:
+        await update.message.reply_text("⏳ Ek process terminal mein chal raha hai. Pehle use khatam hone dein ya /stop karein.")
         return
 
     message = update.message
@@ -635,24 +381,81 @@ async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT
     content = await tg_file.download_as_bytearray()
     saved_info = FileManager.save_file(bytes(content), original_name, pdir)
 
-    confirm_msg = f"📥 `{saved_info['name']}` save hui ({saved_info['size_kb']} KB)"
-    if saved_info.get("unzip_info"):
-        confirm_msg += f"\n{saved_info['unzip_info']}"
-
-    # Add to queue
-    item_title = f"{saved_info['name']} (file)" + (f": {caption}" if caption else "")
-    res = queue_manager.add_item(
-        title=item_title,
-        item_type="file",
-        file_path=str(saved_info["rel_path"]),
-        caption=caption
+    # Immediately backup the uploaded file to the Telegram Storage Channel
+    saved_path = pdir / saved_info["rel_path"]
+    asyncio.create_task(
+        storage_manager.backup_file(
+            bot=context.bot,
+            file_path=saved_path,
+            caption=f"Upload caption: {caption}" if caption else ""
+        )
     )
 
-    if res.get("is_next_round"):
-        await update.message.reply_text(f"{confirm_msg}\n⏳ Current run ke baad Agle Round mein chalegi.")
-    else:
-        q_text, markup = queue_manager.build_queue_text_and_markup()
-        await update.message.reply_text(f"{confirm_msg}\n\n{q_text}", reply_markup=markup, parse_mode="Markdown")
+    item_title = f"{saved_info['name']} (file)" + (f": {caption}" if caption else "")
+    state.add_to_buffer(
+        text=f"File inbox/{saved_info['name']}" + (f" (caption: {caption})" if caption else ""),
+        item_type="file",
+        file_name=saved_info["name"],
+        size_kb=saved_info["size_kb"]
+    )
+
+    buf_text, markup = render_buffer_text_and_markup()
+
+    if state.buffer_message_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=state.buffer_message_id,
+                text=buf_text,
+                reply_markup=markup,
+                parse_mode="Markdown"
+            )
+            return
+        except Exception:
+            pass
+
+    msg = await update.message.reply_text(buf_text, reply_markup=markup, parse_mode="Markdown")
+    state.buffer_message_id = msg.message_id
+
+# ----------------- Execution Pipeline -----------------
+
+async def execute_terminal_task(
+    prompt: str,
+    bot,
+    chat_id: int,
+    live_message_id: int,
+    conversation_id: str,
+    project_dir: Path
+):
+    try:
+        res = await runner.run_task(
+            prompt=prompt,
+            project_dir=project_dir,
+            bot=bot,
+            chat_id=chat_id,
+            live_message_id=live_message_id,
+            conversation_id=conversation_id
+        )
+
+        response_text = res.get("response", "").strip()
+        if response_text:
+            masked = mask_secrets(response_text)
+            # Split into chunks of <= 4000 chars for Telegram
+            chunks = [masked[i:i+4000] for i in range(0, len(masked), 4000)]
+            for chunk in chunks:
+                try:
+                    await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
+                except Exception:
+                    await bot.send_message(chat_id=chat_id, text=chunk)
+
+    except Exception as e:
+        logger.error(f"Error in execute_terminal_task: {e}")
+        try:
+            await bot.send_message(chat_id=chat_id, text=f"❌ Execution error: {e}")
+        except Exception:
+            pass
+    finally:
+        state.buffer_message_id = None
 
 # ----------------- Callback Queries -----------------
 
@@ -665,155 +468,57 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     data = query.data or ""
     pdir = state.get_project_dir()
 
-    if data == "q_proceed":
-        if queue_manager.is_processing:
-            await query.answer("Pehle se run chal raha hai!", show_alert=True)
+    if data == "run_proceed":
+        if runner.is_running:
+            await query.answer("Kaam pehle se chal raha hai!", show_alert=True)
             return
+
+        if not state.prompt_buffer:
+            await query.answer("Buffer khali hai!", show_alert=True)
+            return
+
+        # Combine buffered items into prompt
+        prompt_lines = []
+        for i, item in enumerate(state.prompt_buffer, 1):
+            prompt_lines.append(f"{i}. {item['text']}")
+        combined_prompt = "\n".join(prompt_lines)
+
+        state.clear_buffer()
+        conv_id = state.active_conversation_id
+
+        header = f"💻 `agy terminal` [{conv_id[:8]}]\n" + "─" * 30
+        start_text = f"{header}\n🚀 Task shuru hua: `{combined_prompt[:50]}`"
+        await query.edit_message_text(start_text, parse_mode="Markdown")
+
         asyncio.create_task(
-            queue_manager.process_queue(
+            execute_terminal_task(
+                prompt=combined_prompt,
                 bot=context.bot,
                 chat_id=query.message.chat_id,
+                live_message_id=query.message.message_id,
+                conversation_id=conv_id,
                 project_dir=pdir
             )
         )
 
-    elif data == "q_clear":
-        queue_manager.clear()
-        q_text, markup = queue_manager.build_queue_text_and_markup()
-        await query.edit_message_text(q_text, reply_markup=markup, parse_mode="Markdown")
-
-    elif data == "q_edit_toggle":
-        # Toggle edit mode in queue
-        q_text, markup = queue_manager.build_queue_text_and_markup(is_edit_mode=True)
-        await query.edit_message_text(q_text, reply_markup=markup, parse_mode="Markdown")
-
-    elif data.startswith("q_del:"):
-        item_id = data.split(":", 1)[1]
-        queue_manager.remove_item(item_id)
-        q_text, markup = queue_manager.build_queue_text_and_markup(is_edit_mode=True)
-        await query.edit_message_text(q_text, reply_markup=markup, parse_mode="Markdown")
-
-    elif data.startswith("q_up:"):
-        item_id = data.split(":", 1)[1]
-        queue_manager.move_item(item_id, "up")
-        q_text, markup = queue_manager.build_queue_text_and_markup(is_edit_mode=True)
-        await query.edit_message_text(q_text, reply_markup=markup, parse_mode="Markdown")
-
-    elif data.startswith("q_down:"):
-        item_id = data.split(":", 1)[1]
-        queue_manager.move_item(item_id, "down")
-        q_text, markup = queue_manager.build_queue_text_and_markup(is_edit_mode=True)
-        await query.edit_message_text(q_text, reply_markup=markup, parse_mode="Markdown")
-
-    elif data.startswith("q_run_one:"):
-        item_id = data.split(":", 1)[1]
-        matched = [x for x in state.queue if x["id"] == item_id]
-        if matched:
-            item = matched[0]
-            queue_manager.remove_item(item_id)
-            status_msg = await query.message.reply_text(f"⚡ Turant chala raha hoon: `{item['title'][:40]}`")
-            asyncio.create_task(
-                runner.run_task(
-                    prompt=item["title"],
-                    project_dir=pdir,
-                    bot=context.bot,
-                    chat_id=query.message.chat_id,
-                    live_message_id=status_msg.message_id,
-                    conversation_id=state.active_conversation_id
-                )
-            )
-
-    elif data == "open_queue":
-        q_text, markup = queue_manager.build_queue_text_and_markup()
-        await query.message.reply_text(q_text, reply_markup=markup, parse_mode="Markdown")
-
-    elif data.startswith("switch_conv:"):
-        conv_id = data.split(":", 1)[1]
-        if state.switch_conversation(conv_id):
-            conv = state.conversations.get(conv_id, {})
-            await query.edit_message_text(
-                f"✅ Switched to session: **{conv.get('title', 'Session')}** (`{conv_id[:8]}`)",
-                parse_mode="Markdown"
-            )
-
-    elif data == "new_conv":
-        new_id = state.new_conversation()
-        conv = state.conversations[new_id]
-        await query.edit_message_text(
-            f"✨ Naya session ban gaya aur active ho gaya:\n**{conv['title']}** (`{new_id[:8]}`)",
-            parse_mode="Markdown"
-        )
-
-    elif data.startswith("switch_mode:"):
-        new_mode = data.split(":", 1)[1]
-        if new_mode in ["chat", "queue", "instant"]:
-            state.mode = new_mode
-            state.save()
-            mini_app_url = get_mini_app_url()
-            mode_names = {
-                "chat": "💬 **Chat Mode (Txt-to-Txt)**\n\nDirect conversational replies active hain. Kuch bhi sawal ya instruction likhein!",
-                "queue": "📋 **Queue Mode (Batch Tasks)**\n\nKaam ki list banegi, aur **[PROCEED]** se execute hogi.",
-                "instant": "⚡ **Instant Mode**\n\nHar command seedha workspace par execute hoga."
-            }
-            await query.answer(f"Switched to {new_mode.upper()} mode!")
-            await query.message.reply_text(
-                f"✅ {mode_names.get(new_mode, new_mode)}",
-                reply_markup=get_main_keyboard(mini_app_url),
-                parse_mode="Markdown"
-            )
-
-    elif data == "open_status":
-        used_mb, total_mb, cpu = get_memory_info()
-        uptime_str = get_uptime_string()
-        text = (
-            "📊 **Cloud PC Status**\n\n"
-            f"• **RAM Usage**: {used_mb} MB / {total_mb} MB\n"
-            f"• **CPU**: {cpu}%\n"
-            f"• **Uptime**: {uptime_str}\n"
-            f"• **Queue Items**: {len(state.queue)} bache hain\n"
-            f"• **Mode**: `{state.mode.upper()}`\n"
-        )
-        await query.message.reply_text(text, parse_mode="Markdown")
-
-    elif data == "open_files":
-        header, markup = FileManager.build_file_browser(pdir)
-        await query.message.reply_text(header, reply_markup=markup, parse_mode="Markdown")
-
-    elif data.startswith("fb_dir:"):
-        sub = data.split(":", 1)[1]
-        header, markup = FileManager.build_file_browser(pdir, sub)
-        await query.edit_message_text(header, reply_markup=markup, parse_mode="Markdown")
-
-    elif data.startswith("fb_get:"):
-        sub = data.split(":", 1)[1]
-        target = pdir / sub
-        if target.exists() and target.is_file():
-            await query.message.reply_document(document=open(target, "rb"), caption=f"📄 {target.name}")
+# ----------------- Bot Builder -----------------
 
 def create_bot_application() -> Application:
     app = ApplicationBuilder().token(config.BOT_TOKEN).build()
 
     # Commands
     app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CommandHandler("chat", chat_command))
-    app.add_handler(CommandHandler("task", task_command))
-    app.add_handler(CommandHandler("queue", queue_command))
-    app.add_handler(CommandHandler("stop", stop_command))
+    app.add_handler(CommandHandler("session", session_command))
     app.add_handler(CommandHandler("new", new_command))
-    app.add_handler(CommandHandler("conversations", conversations_command))
-    app.add_handler(CommandHandler("mode", mode_command))
-    app.add_handler(CommandHandler("files", files_command))
+    app.add_handler(CommandHandler("stop", stop_command))
+    app.add_handler(CommandHandler("backup", backup_command))
     app.add_handler(CommandHandler("get", get_command))
-    app.add_handler(CommandHandler("zip", zip_command))
-    app.add_handler(CommandHandler("undo", undo_command))
-    app.add_handler(CommandHandler("sync", sync_command))
     app.add_handler(CommandHandler("login", login_command))
     app.add_handler(CommandHandler("code", code_command))
     app.add_handler(CommandHandler("key", key_command))
     app.add_handler(CommandHandler("help", help_command))
 
-    # Callback Queries
+    # Callback Queries (Single Proceed button)
     app.add_handler(CallbackQueryHandler(callback_query_handler))
 
     # Messages & Files
