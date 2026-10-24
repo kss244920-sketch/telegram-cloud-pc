@@ -1,24 +1,22 @@
 import logging
+import os
 import re
+from pathlib import Path
 from telegram import User
 import config
 
 logger = logging.getLogger("security")
 
+FORBIDDEN_DIRS = ["/etc", "/usr", "/root", "/var", "/bin", "/sbin", "/boot", "/dev", "/proc", "/sys"]
+
 def is_authorized(user: User | None) -> bool:
-    """
-    Strict security check:
-    Only ALLOWED_USER_ID or ALLOWED_USERNAME can interact with this bot.
-    Anyone else is completely and silently dropped (no reply, no error).
-    """
+    """Strict authorization: only ALLOWED_USER_ID or ALLOWED_USERNAME accepted."""
     if not user:
         return False
 
-    # Check numeric ID if known
     if config.ALLOWED_USER_ID is not None and user.id == config.ALLOWED_USER_ID:
         return True
 
-    # Check username
     username = (user.username or "").lower().lstrip("@")
     if config.ALLOWED_USERNAME and username == config.ALLOWED_USERNAME:
         if config.ALLOWED_USER_ID is None:
@@ -53,4 +51,34 @@ def mask_secrets(text: str) -> str:
     # Regex patterns for GitHub tokens (ghp_..., gho_...)
     clean = re.sub(r"\bgh[pousr]_[a-zA-Z0-9]{36}\b", "********", clean)
 
+    # Regex patterns for generic API keys
+    clean = re.sub(r"\bAIza[0-9A-Za-z-_]{35}\b", "********", clean)
+
     return clean
+
+def sanitize_filename(filename: str) -> str:
+    """Remove unsafe path traversal characters like ../ or full paths."""
+    base = os.path.basename(filename)
+    clean = re.sub(r"[^a-zA-Z0-9_.\-\s]", "_", base)
+    return clean or "uploaded_file"
+
+def is_path_safe(target_path: Path, base_dir: Path = config.WORKSPACE_DIR) -> bool:
+    """Ensure target path does not escape base workspace directory."""
+    try:
+        resolved_target = target_path.resolve()
+        resolved_base = base_dir.resolve()
+        return resolved_base in resolved_target.parents or resolved_target == resolved_base
+    except Exception:
+        return False
+
+def check_command_safety(command_str: str) -> tuple[bool, str]:
+    """Check if a shell command tries to touch sensitive system paths."""
+    cmd_lower = command_str.lower()
+    for forbidden in FORBIDDEN_DIRS:
+        pattern = rf"(^|\s|/|\.){re.escape(forbidden[1:])}(/|\s|$)"
+        if forbidden in cmd_lower or re.search(pattern, cmd_lower):
+            if any(allowed in cmd_lower for allowed in ["/usr/bin/python", "/usr/bin/git", "/usr/bin/curl", "/usr/local/bin"]):
+                continue
+            if "rm " in cmd_lower or "mv " in cmd_lower or "cp " in cmd_lower or "chmod " in cmd_lower:
+                return False, f"System path '{forbidden}' modify karna blocked hai."
+    return True, ""
