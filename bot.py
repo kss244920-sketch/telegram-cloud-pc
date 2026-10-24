@@ -120,7 +120,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👉 **Direct Terminal Usage:**\n"
         "Seedha chat mein koi bhi shell command (`ls -la`, `pwd`, `python ...`, `pip ...`) ya AI prompt type karein.\n"
         "Ye message turant real-time live terminal window ban kar stream hoga!\n\n"
-        "Commands: `/session`, `/new`, `/stop`, `/storage`, `/login`, `/key`, `/get <file>`, `/backup`"
+        "Commands: `/session`, `/new`, `/stop`, `/storage`, `/login`, `/logout`, `/key`, `/get <file>`, `/backup`"
     )
     # Remove any leftover reply keyboard
     await update.message.reply_text(
@@ -237,6 +237,8 @@ def save_auth_bundle_to_render() -> bool:
         import tarfile, io, base64, urllib.request, json
         cred_dir = Path.home() / ".gemini"
         if not cred_dir.exists():
+            cred_dir = Path("/root/.gemini")
+        if not cred_dir.exists():
             return False
 
         buf = io.BytesIO()
@@ -282,10 +284,89 @@ def save_auth_bundle_to_render() -> bool:
         logger.error(f"Failed to save auth bundle to Render: {e}")
         return False
 
+async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global active_login_process
+    if not await check_auth_or_reject(update):
+        return
+
+    msg = await update.message.reply_text("⏳ AI session logout aur credentials reset ho rahe hain...")
+
+    if active_login_process:
+        try:
+            active_login_process.terminate()
+        except Exception:
+            pass
+        active_login_process = None
+
+    target_dirs = [
+        Path.home() / ".gemini",
+        Path("/root/.gemini")
+    ]
+    files_to_remove = [
+        "oauth_creds.json",
+        "google_accounts.json",
+        "antigravity-cli/antigravity-oauth-token",
+        "antigravity-cli/jetski_state.pbtxt"
+    ]
+    for d in target_dirs:
+        for f in files_to_remove:
+            target = d / f
+            try:
+                if target.exists():
+                    target.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to remove {target}: {e}")
+
+    config.GEMINI_API_KEY = ""
+    os.environ.pop("GEMINI_API_KEY", None)
+
+    # Clear AGY_AUTH_DATA on Render
+    try:
+        import urllib.request, json
+        render_api_key = os.getenv("RENDER_API_KEY", "rnd_3tagyUF2IqkgZyiRiBHD7CbZjxAg")
+        render_service_id = os.getenv("RENDER_SERVICE_ID", "srv-dbe4n88m7kps73capeog")
+        url = f"https://api.render.com/v1/services/{render_service_id}/env-vars/AGY_AUTH_DATA"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"value": ""}).encode("utf-8"),
+            headers={"Authorization": f"Bearer {render_api_key}", "Content-Type": "application/json"},
+            method="PUT"
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            pass
+    except Exception as e:
+        logger.warning(f"Could not clear Render AGY_AUTH_DATA: {e}")
+
+    state.new_conversation()
+
+    text = (
+        "🚪 **Successfully Logged Out!**\n\n"
+        "Purana Google account / session clear ho gaya hai.\n\n"
+        "👉 **Naya account connect karne ke liye:**\n"
+        "1. Chat mein `/login` bhejein\n"
+        "2. Naye Gmail account se sign-in karke code lein\n"
+        "3. `/code <authorization_code>` bhejein\n\n"
+        "Ya Gemini API key set karein: `/key <API_KEY>`"
+    )
+    await msg.edit_text(text, parse_mode="Markdown")
+
 async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global active_login_process
     if not await check_auth_or_reject(update):
         return
+
+    args = [x.lower() for x in (context.args or [])]
+    force_new = "force" in args or "new" in args
+
+    # If force, perform logout cleanup first
+    if force_new:
+        target_dirs = [Path.home() / ".gemini", Path("/root/.gemini")]
+        for d in target_dirs:
+            for f in ["oauth_creds.json", "google_accounts.json", "antigravity-cli/antigravity-oauth-token"]:
+                t = d / f
+                if t.exists():
+                    try: t.unlink()
+                    except Exception: pass
 
     msg = await update.message.reply_text("⏳ Google OAuth Sign-in link generate ho rahi hai...")
 
@@ -327,7 +408,12 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await msg.edit_text(text, parse_mode="Markdown")
         else:
-            await msg.edit_text("ℹ️ Agy pehle se authenticated hai ya direct API key mode active hai.")
+            await msg.edit_text(
+                "ℹ️ Agy pehle se authenticated hai ya direct API key mode active hai.\n\n"
+                "👉 Kisi naye Google account se switch karne ke liye:\n"
+                "• `/logout` karein, phir `/login` karein\n"
+                "• Ya seedha `/login force` karein!"
+            )
     except Exception as e:
         await msg.edit_text(f"❌ Error: {e}")
 
@@ -396,6 +482,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/get <file>` : Workspace ki file chat mein maangein\n"
         "• `/backup` : Workspace snapshot storage channel par upload karein\n"
         "• `/login` & `/code` : Google OAuth login\n"
+        "• `/logout` : Current Google account logout karein (switch account)\n"
         "• `/key <API_KEY>` : Gemini API Key set karein\n\n"
         "💡 **Chat Execution:** Chat mein messages/files bhein, aur **[▶️ PROCEED]** dabayein!"
     )
@@ -643,6 +730,7 @@ def create_bot_application() -> Application:
     app.add_handler(CommandHandler("backup", backup_command))
     app.add_handler(CommandHandler("get", get_command))
     app.add_handler(CommandHandler("login", login_command))
+    app.add_handler(CommandHandler("logout", logout_command))
     app.add_handler(CommandHandler("code", code_command))
     app.add_handler(CommandHandler("key", key_command))
     app.add_handler(CommandHandler("help", help_command))
