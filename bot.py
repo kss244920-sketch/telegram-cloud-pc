@@ -4,9 +4,11 @@ import re
 import time
 import shutil
 import asyncio
+import html
 import psutil
 from pathlib import Path
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -23,6 +25,7 @@ from state import state
 from runner import runner
 from file_manager import FileManager
 from git_manager import GitManager
+from formatter import send_formatted_message, markdown_to_telegram_html
 from storage_manager import storage_manager
 
 logger = logging.getLogger("telegram_bot")
@@ -79,7 +82,7 @@ def render_buffer_text_and_markup() -> tuple[str | None, InlineKeyboardMarkup | 
         return None, None
 
     count = len(state.prompt_buffer)
-    lines = [f"📥 **Input Buffer ({count} item{'s' if count > 1 else ''}):**"]
+    lines = [f"📥 <b>Input Buffer ({count} item{'s' if count > 1 else ''}):</b>"]
     for i, item in enumerate(state.prompt_buffer, 1):
         if item.get("type") == "file":
             fname = item.get("file_name", "file")
@@ -96,11 +99,13 @@ def render_buffer_text_and_markup() -> tuple[str | None, InlineKeyboardMarkup | 
                 icon = "📦"
             else:
                 icon = "📄"
-            lines.append(f"{i}. {icon} `{fname}` ({item.get('size_kb', 0)} KB)")
+            escaped_fname = html.escape(fname)
+            lines.append(f"{i}. {icon} <code>{escaped_fname}</code> ({item.get('size_kb', 0)} KB)")
         else:
-            lines.append(f"{i}. \"{item['text'][:80]}\"")
+            escaped_text = html.escape(item['text'][:80])
+            lines.append(f"{i}. \"{escaped_text}\"")
 
-    lines.append("\n_Aur messages/files bhejein, ya neeche Proceed karein:_")
+    lines.append("\n<i>Aur messages/files bhejein, ya neeche Proceed karein:</i>")
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("▶️ PROCEED", callback_data="run_proceed")]
     ])
@@ -609,6 +614,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     state.add_to_buffer(text, item_type="text")
     buf_text, markup = render_buffer_text_and_markup()
 
+    sent = False
     if state.buffer_message_id:
         try:
             await context.bot.edit_message_text(
@@ -616,14 +622,26 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 message_id=state.buffer_message_id,
                 text=buf_text,
                 reply_markup=markup,
-                parse_mode="Markdown"
+                parse_mode=ParseMode.HTML
             )
-            return
+            sent = True
         except Exception:
             pass
 
-    msg = await update.message.reply_text(buf_text, reply_markup=markup, parse_mode="Markdown")
-    state.buffer_message_id = msg.message_id
+    if not sent:
+        msg = await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=buf_text,
+            reply_markup=markup,
+            parse_mode=ParseMode.HTML
+        )
+        state.buffer_message_id = msg.message_id
+
+    # Auto-delete user message to keep chat tidy
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
 
 async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
@@ -696,6 +714,7 @@ async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT
 
     buf_text, markup = render_buffer_text_and_markup()
 
+    sent = False
     if state.buffer_message_id:
         try:
             await context.bot.edit_message_text(
@@ -703,14 +722,26 @@ async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT
                 message_id=state.buffer_message_id,
                 text=buf_text,
                 reply_markup=markup,
-                parse_mode="Markdown"
+                parse_mode=ParseMode.HTML
             )
-            return
+            sent = True
         except Exception:
             pass
 
-    msg = await update.message.reply_text(buf_text, reply_markup=markup, parse_mode="Markdown")
-    state.buffer_message_id = msg.message_id
+    if not sent:
+        msg = await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=buf_text,
+            reply_markup=markup,
+            parse_mode=ParseMode.HTML
+        )
+        state.buffer_message_id = msg.message_id
+
+    # Auto-delete user message to keep chat tidy
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
 
 # ----------------- Execution Pipeline -----------------
 
@@ -735,13 +766,7 @@ async def execute_terminal_task(
         response_text = res.get("response", "").strip()
         # Only send response if not empty (for bash tasks, output is already in terminal block)
         if response_text:
-            masked = mask_secrets(response_text)
-            chunks = [masked[i:i+4000] for i in range(0, len(masked), 4000)]
-            for chunk in chunks:
-                try:
-                    await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
-                except Exception:
-                    await bot.send_message(chat_id=chat_id, text=chunk)
+            await send_formatted_message(bot=bot, chat_id=chat_id, text=response_text)
 
     except Exception as e:
         logger.error(f"Error in execute_terminal_task: {e}")

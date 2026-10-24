@@ -15,7 +15,7 @@ INBOX_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Bot & Auth configuration
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8798239169:AAFbzjM4n7wYzwVNrLbiw-cw0irXIGLI8yI")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ALLOWED_USERNAME = os.getenv("ALLOWED_USERNAME", "OwAtom").lower().lstrip("@")
 _allowed_user_id_raw = os.getenv("ALLOWED_USER_ID", "").strip()
 ALLOWED_USER_ID: int | None = int(_allowed_user_id_raw) if _allowed_user_id_raw.isdigit() else None

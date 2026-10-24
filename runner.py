@@ -515,6 +515,7 @@ class AgyRunner:
         ])
 
         display_lines: list[str] = [f"🚀 Task: {prompt[:35]}"]
+        last_known_tokens: dict = {}
         last_edit_time = 0.0
 
         async def update_msg(final=False, status_override: str | None = None):
@@ -631,14 +632,12 @@ class AgyRunner:
                         delta = su.get("text_delta", "")
                         if delta:
                             agent_deltas.append(delta)
-                            clean_d = delta.strip()
-                            if clean_d and len(clean_d) > 3 and not clean_d.startswith("{"):
-                                first_line = clean_d.split("\n")[0][:40]
-                                prefix = f"💬 {first_line}"
-                                if not display_lines or not display_lines[-1].startswith(prefix[:20]):
-                                    display_lines.append(prefix)
                         if dur > 0:
                             display_lines.append(f"🧠 Thought ({int(dur)}s)")
+
+                        usage = su.get("usage") or {}
+                        if usage:
+                            last_known_tokens = usage
 
                     elif stype == "tool":
                         tool_name = su.get("tool_name", "")
@@ -668,6 +667,8 @@ class AgyRunner:
                 elif ev_type == "result":
                     res = event.get("result", {})
                     final_response = res.get("response", "")
+                    if res.get("usage"):
+                        last_known_tokens = res.get("usage")
 
             except json.JSONDecodeError:
                 if len(line_str) > 0 and not line_str.startswith("{"):
@@ -738,8 +739,19 @@ class AgyRunner:
             await update_msg(final=True, status_override=f"🛑 Stopped by user ({time_str})")
             return {"status": "stopped", "time": time_str, "response": "Task cancelled by user."}
 
+        if last_known_tokens:
+            in_t = last_known_tokens.get("input_tokens", 0)
+            out_t = last_known_tokens.get("output_tokens", 0)
+            tot_t = last_known_tokens.get("total_tokens", in_t + out_t)
+            token_line = f"🪙 Usage: {tot_t:,} tok (in: {in_t:,} | out: {out_t:,})"
+            if not display_lines or not display_lines[-1].startswith("🪙"):
+                display_lines.append(token_line)
+            success_status = f"✅ Done in {time_str} | 🪙 {tot_t:,} tok"
+        else:
+            success_status = f"✅ Completed in {time_str}"
+
         if return_code == 0:
-            await update_msg(final=True, status_override=f"✅ Completed in {time_str}")
+            await update_msg(final=True, status_override=success_status)
             GitManager.auto_commit_and_push(project_dir, prompt[:50])
 
             try:
