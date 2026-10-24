@@ -186,13 +186,16 @@ async def get_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def save_auth_bundle_to_render() -> bool:
     try:
         import tarfile, io, base64, urllib.request, json
-        cred_dir = Path.home() / ".gemini" / "antigravity-cli"
+        cred_dir = Path.home() / ".gemini"
         if not cred_dir.exists():
             return False
 
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            tar.add(str(cred_dir), arcname=".")
+            for item in cred_dir.iterdir():
+                # Don't pack huge brain conversation history or cache
+                if item.name not in ["brain", "cache", "log", "tmp"]:
+                    tar.add(str(item), arcname=item.name)
         buf.seek(0)
         b64_str = base64.b64encode(buf.read()).decode("utf-8")
 

@@ -45,9 +45,7 @@ def restore_auth():
         # Restore into ~/.gemini/antigravity-cli
         dest_dirs = [
             Path.home() / ".gemini",
-            Path("/root/.gemini"),
-            Path.home() / ".gemini" / "antigravity-cli",
-            Path("/root/.gemini/antigravity-cli")
+            Path("/root/.gemini")
         ]
         for dest in dest_dirs:
             try:
