@@ -13,10 +13,22 @@ import config
 from bot import create_bot_application, get_uptime_string, get_memory_info
 from state import state
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+import collections
+
+# Ring buffer for recent logs
+LOG_BUFFER = collections.deque(maxlen=100)
+
+class BufferLogHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            LOG_BUFFER.append(f"{record.asctime if hasattr(record, 'asctime') else ''} [{record.levelname}] {record.name}: {msg}")
+        except Exception:
+            pass
+
+buffer_handler = BufferLogHandler()
+buffer_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+logging.getLogger().addHandler(buffer_handler)
 logger = logging.getLogger("server")
 
 bot_app = create_bot_application()
@@ -60,6 +72,10 @@ async def health():
         },
         status_code=200
     )
+
+@app.get("/api/debug-logs")
+async def debug_logs_api():
+    return {"logs": list(LOG_BUFFER)}
 
 @app.get("/status")
 async def status_api():
