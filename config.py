@@ -28,3 +28,29 @@ def set_allowed_user_id(user_id: int):
     """Dynamically locks the allowed numerical ID once user @OwAtom messages the bot."""
     global ALLOWED_USER_ID
     ALLOWED_USER_ID = user_id
+
+def restore_auth():
+    """Restores agy authentication bundle from environment variable if present."""
+    raw_b64 = os.getenv("AGY_AUTH_DATA", "").strip()
+    if not raw_b64:
+        return
+    try:
+        import tarfile, io, base64
+        # Restore into ~/.gemini/antigravity-cli
+        dest_dirs = [
+            Path.home() / ".gemini" / "antigravity-cli",
+            Path("/root/.gemini/antigravity-cli")
+        ]
+        for dest in dest_dirs:
+            try:
+                dest.mkdir(parents=True, exist_ok=True)
+                buf = io.BytesIO(base64.b64decode(raw_b64))
+                with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+                    tar.extractall(path=dest)
+            except Exception:
+                pass
+    except Exception as e:
+        print("Failed to restore agy auth bundle:", e)
+
+# Unpack auth if available
+restore_auth()

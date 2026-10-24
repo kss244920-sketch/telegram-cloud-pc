@@ -99,6 +99,8 @@ class PTYSession:
             env["TERM"] = "xterm-256color"
             env["COLORTERM"] = "truecolor"
             env["LANG"] = "en_US.UTF-8"
+            env["PAGER"] = "cat"
+            env["SYSTEMD_PAGER"] = "cat"
             env["PATH"] = f"/usr/local/bin:/root/.local/bin:{env.get('PATH', '')}"
             if config.GEMINI_API_KEY:
                 env["GEMINI_API_KEY"] = config.GEMINI_API_KEY
