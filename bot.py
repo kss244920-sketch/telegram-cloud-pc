@@ -118,9 +118,10 @@ async def session_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     used_mb, total_mb, cpu = get_memory_info()
+    sess_disp = state.active_conversation_id if state.active_conversation_id else "Fresh (Ready for task)"
     text = (
         "💻 **Terminal Session Info**\n\n"
-        f"• **Session ID**: `{state.active_conversation_id}`\n"
+        f"• **Session ID**: `{sess_disp}`\n"
         f"• **Project**: `{state.current_project}`\n"
         f"• **Storage Channel**: `{config.STORAGE_CHANNEL_ID}` (Active)\n"
         f"• **RAM**: {used_mb}MB / {total_mb}MB | CPU: {cpu}%\n"
@@ -132,9 +133,8 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
         return
 
-    new_id = state.new_conversation()
-    state.clear_buffer()
-    await update.message.reply_text(f"✨ Naya agy session start hua: `{new_id[:8]}`", parse_mode="Markdown")
+    state.new_conversation()
+    await update.message.reply_text("✨ Naya terminal session start hua! Ab koi bhi prompt ya command bhejein.", parse_mode="Markdown")
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
@@ -511,17 +511,27 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
         state.clear_buffer()
         conv_id = state.active_conversation_id
+        cid_display = conv_id[:8] if conv_id else "session"
 
-        header = f"💻 `agy terminal` [{conv_id[:8]}]\n" + "─" * 30
-        start_text = f"{header}\n🚀 Task shuru hua: `{combined_prompt[:50]}`"
-        await query.edit_message_text(start_text, parse_mode="Markdown")
+        header = f"💻 agy terminal [{cid_display}]\n" + "─" * 30
+        clean_prompt_preview = combined_prompt.split('\n')[0][:40]
+        start_text = f"```\n{header}\n🚀 Task shuru hua: {clean_prompt_preview}\n```"
+        try:
+            await query.edit_message_text(start_text, parse_mode="Markdown")
+        except Exception:
+            try:
+                await query.edit_message_text(f"{header}\n🚀 Task shuru hua: {clean_prompt_preview}")
+            except Exception:
+                pass
 
+        chat_id = update.effective_chat.id
+        live_msg_id = query.message.message_id
         asyncio.create_task(
             execute_terminal_task(
                 prompt=combined_prompt,
                 bot=context.bot,
-                chat_id=query.message.chat_id,
-                live_message_id=query.message.message_id,
+                chat_id=chat_id,
+                live_message_id=live_msg_id,
                 conversation_id=conv_id,
                 project_dir=pdir
             )

@@ -29,6 +29,7 @@ class BufferLogHandler(logging.Handler):
 buffer_handler = BufferLogHandler()
 buffer_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 logging.getLogger().addHandler(buffer_handler)
+logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger("server")
 
 bot_app = create_bot_application()
@@ -123,11 +124,13 @@ async def status_api():
         except Exception as e:
             agy_version = f"error: {e}"
 
+    from runner import runner
     return {
         "status": "online",
         "service": "telegram-cloud-pc",
         "owner": f"@{config.ALLOWED_USERNAME}",
-        "active_session": state.active_conversation_id,
+        "active_session": state.active_conversation_id or "fresh",
+        "runner_busy": runner.is_running,
         "storage_channel": config.STORAGE_CHANNEL_ID,
         "agy_installed": agy_path is not None,
         "agy_version": agy_version,

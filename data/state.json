@@ -1,16 +1,9 @@
 {
-  "mode": "chat",
+  "mode": "terminal",
   "current_project": "default",
   "auto_push": true,
-  "active_conversation_id": "65a7dea1-8028-4751-b4c4-f11ab0e358ba",
-  "conversations": {
-    "65a7dea1-8028-4751-b4c4-f11ab0e358ba": {
-      "id": "65a7dea1-8028-4751-b4c4-f11ab0e358ba",
-      "title": "Default Session",
-      "created_at": "2026-10-24T06:50:12.136736",
-      "updated_at": "2026-10-24T06:50:12.136736"
-    }
-  },
+  "active_conversation_id": "",
+  "conversations": {},
   "queue": [],
   "history": [],
   "chat_history": {},

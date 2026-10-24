@@ -13,7 +13,7 @@ class StateManager:
         self.mode = "terminal"
         self.current_project = "default"
         self.auto_push = True
-        self.active_conversation_id = str(uuid.uuid4())
+        self.active_conversation_id = ""
         self.conversations = {}
         self.prompt_buffer = []  # list of items waiting for Proceed
         self.buffer_message_id: int | None = None
@@ -22,8 +22,18 @@ class StateManager:
         self.was_restarted = False
         
         self.load()
-        if not self.conversations:
-            self.new_conversation(title="Default Session")
+
+    def set_active_conversation_id(self, conv_id: str):
+        self.active_conversation_id = conv_id
+        if conv_id and conv_id not in self.conversations:
+            timestamp = datetime.utcnow().isoformat()
+            self.conversations[conv_id] = {
+                "id": conv_id,
+                "title": f"Session {len(self.conversations) + 1}",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            }
+        self.save()
 
     def add_to_buffer(self, text: str, item_type: str = "text", file_name: str | None = None, size_kb: float | None = None):
         self.prompt_buffer.append({
@@ -53,18 +63,10 @@ class StateManager:
         return self.chat_history.get(conv_id, [])
 
     def new_conversation(self, title: str | None = None) -> str:
-        new_id = str(uuid.uuid4())
-        timestamp = datetime.utcnow().isoformat()
-        conv_title = title or f"Session {len(self.conversations) + 1}"
-        self.conversations[new_id] = {
-            "id": new_id,
-            "title": conv_title,
-            "created_at": timestamp,
-            "updated_at": timestamp,
-        }
-        self.active_conversation_id = new_id
+        self.active_conversation_id = ""
+        self.clear_buffer()
         self.save()
-        return new_id
+        return "new"
 
     def switch_conversation(self, conv_id: str) -> bool:
         if conv_id in self.conversations:
