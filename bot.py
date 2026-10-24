@@ -386,30 +386,52 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "--dangerously-skip-permissions",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+            stderr=asyncio.subprocess.PIPE,
             env=env
         )
 
         auth_url = ""
         accumulated = ""
-        start_time = time.time()
-        while time.time() - start_time < 25:
-            try:
-                chunk = await asyncio.wait_for(active_login_process.stdout.read(512), timeout=2.0)
-                if not chunk:
-                    break
-                line = chunk.decode("utf-8", errors="ignore")
-                accumulated += line
-            except asyncio.TimeoutError:
-                pass
 
+        async def read_stream(stream):
+            nonlocal accumulated, auth_url
+            while active_login_process and not auth_url:
+                try:
+                    chunk = await asyncio.wait_for(stream.read(512), timeout=1.0)
+                    if not chunk:
+                        if active_login_process.returncode is not None:
+                            break
+                        await asyncio.sleep(0.3)
+                        continue
+                    text = chunk.decode("utf-8", errors="ignore")
+                    accumulated += text
+                    match = re.search(r'https://accounts\.google\.com/o/oauth2/auth[^\s"\'\<\>\)]+', accumulated)
+                    if match:
+                        auth_url = match.group(0).strip().rstrip(".,;)")
+                        break
+                except asyncio.TimeoutError:
+                    if active_login_process.returncode is not None:
+                        break
+                except Exception:
+                    break
+
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    read_stream(active_login_process.stdout),
+                    read_stream(active_login_process.stderr)
+                ),
+                timeout=18.0
+            )
+        except asyncio.TimeoutError:
+            pass
+
+        logger.info(f"Login process output length: {len(accumulated)}, auth_url found: {bool(auth_url)}")
+
+        if not auth_url and accumulated:
             match = re.search(r'https://accounts\.google\.com/o/oauth2/auth[^\s"\'\<\>\)]+', accumulated)
             if match:
                 auth_url = match.group(0).strip().rstrip(".,;)")
-                break
-
-            if active_login_process.returncode is not None:
-                break
 
         if auth_url:
             login_markup = InlineKeyboardMarkup([
@@ -431,12 +453,19 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 disable_web_page_preview=True
             )
         else:
-            await msg.edit_text(
-                "ℹ️ Agy pehle se authenticated hai ya direct API key mode active hai.\n\n"
-                "👉 Kisi naye Google account se switch karne ke liye:\n"
-                "• `/logout` karein, phir `/login` karein\n"
-                "• Ya seedha `/login force` karein!"
-            )
+            if "Authentication required" in accumulated or "Waiting for authentication" in accumulated:
+                await msg.edit_text(
+                    f"🔐 **Sign-In Link Generated:**\n\n```text\n{accumulated.strip()}\n```\n\n"
+                    "Code copy karke bhejein: `/code <authorization_code>`",
+                    parse_mode="Markdown"
+                )
+            else:
+                await msg.edit_text(
+                    "ℹ️ Agy pehle se authenticated hai ya direct API key mode active hai.\n\n"
+                    "👉 Kisi naye Google account se switch karne ke liye:\n"
+                    "• `/logout` karein, phir `/login` karein\n"
+                    "• Ya seedha `/login force` karein!"
+                )
     except Exception as e:
         await msg.edit_text(f"❌ Error: {e}")
 
