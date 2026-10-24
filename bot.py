@@ -370,40 +370,31 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    # Direct instant terminal execution!
-    cwd = state.get_current_cwd()
-    dir_name = cwd.name or "workspace"
-    conv_id = state.active_conversation_id
+    state.add_to_buffer(text, item_type="text")
+    buf_text, markup = render_buffer_text_and_markup()
 
-    clean_preview = text.split("\n")[0][:35]
-    header = f"┌── 💻 Terminal [{dir_name}] "
-    header += "─" * max(1, 38 - len(header)) + "┐"
-    footer = "└── [⏳ Starting...] " + "─" * 16 + "┘"
-    initial_box = f"```text\n{header}\n$ {clean_preview}\n{footer}\n```"
+    if state.buffer_message_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=state.buffer_message_id,
+                text=buf_text,
+                reply_markup=markup,
+                parse_mode="Markdown"
+            )
+            return
+        except Exception:
+            pass
 
-    cancel_markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛑 Cancel", callback_data="stop_current_task")]
-    ])
-
-    live_msg = await update.message.reply_text(
-        initial_box,
-        reply_markup=cancel_markup,
-        parse_mode="Markdown"
-    )
-
-    asyncio.create_task(
-        execute_terminal_task(
-            prompt=text,
-            bot=context.bot,
-            chat_id=update.effective_chat.id,
-            live_message_id=live_msg.message_id,
-            conversation_id=conv_id,
-            project_dir=cwd
-        )
-    )
+    msg = await update.message.reply_text(buf_text, reply_markup=markup, parse_mode="Markdown")
+    state.buffer_message_id = msg.message_id
 
 async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
+        return
+
+    if runner.is_running:
+        await update.message.reply_text("⏳ Ek process chal raha hai. Pehle use khatam hone dein ya /stop karein.")
         return
 
     message = update.message
@@ -436,31 +427,30 @@ async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT
         )
     )
 
-    size_kb = saved_info.get("size_kb", 0)
-    if caption:
-        # If user attached an instruction with the file, run it directly in terminal!
-        full_prompt = f"File {saved_info['rel_path']} uploaded. Instruction: {caption}"
-        live_msg = await update.message.reply_text(
-            f"```text\n┌── 💻 Terminal [file-task] ───────────────┐\n$ {caption[:30]}\n└── [⏳ Starting...] ─────────────────────┘\n```",
-            parse_mode="Markdown"
-        )
-        asyncio.create_task(
-            execute_terminal_task(
-                prompt=full_prompt,
-                bot=context.bot,
+    state.add_to_buffer(
+        text=f"File inbox/{saved_info['name']}" + (f" (caption: {caption})" if caption else ""),
+        item_type="file",
+        file_name=saved_info["name"],
+        size_kb=saved_info["size_kb"]
+    )
+
+    buf_text, markup = render_buffer_text_and_markup()
+
+    if state.buffer_message_id:
+        try:
+            await context.bot.edit_message_text(
                 chat_id=update.effective_chat.id,
-                live_message_id=live_msg.message_id,
-                conversation_id=state.active_conversation_id,
-                project_dir=pdir
+                message_id=state.buffer_message_id,
+                text=buf_text,
+                reply_markup=markup,
+                parse_mode="Markdown"
             )
-        )
-    else:
-        text = (
-            f"📥 **File Saved!**\n"
-            f"• Path: `{saved_info['rel_path']}` ({size_kb} KB)\n\n"
-            f"💡 Ab terminal me koi bhi command (jaise `python inbox/{saved_info['name']}`) ya instruction bhejein."
-        )
-        await update.message.reply_text(text, parse_mode="Markdown")
+            return
+        except Exception:
+            pass
+
+    msg = await update.message.reply_text(buf_text, reply_markup=markup, parse_mode="Markdown")
+    state.buffer_message_id = msg.message_id
 
 # ----------------- Execution Pipeline -----------------
 
@@ -531,6 +521,26 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         state.clear_buffer()
         conv_id = state.active_conversation_id
         cwd = state.get_current_cwd()
+        dir_name = cwd.name or "workspace"
+
+        clean_preview = combined_prompt.split('\n')[0][:35]
+        header = f"┌── 💻 Terminal [{dir_name}] "
+        header += "─" * max(1, 38 - len(header)) + "┐"
+        footer = "└── [⏳ Starting...] " + "─" * 16 + "┘"
+        initial_box = f"```text\n{header}\n🚀 Task: {clean_preview}\n{footer}\n```"
+
+        cancel_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛑 Cancel", callback_data="stop_current_task")]
+        ])
+
+        try:
+            await query.edit_message_text(
+                initial_box,
+                reply_markup=cancel_markup,
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
 
         live_msg_id = query.message.message_id
         asyncio.create_task(

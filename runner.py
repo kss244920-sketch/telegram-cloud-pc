@@ -104,7 +104,7 @@ class AgyRunner:
             # Automatic checkpoint before task
             GitManager.create_checkpoint(project_dir, prompt)
 
-            # Pure Terminal by default: EVERYTHING runs in Bash unless explicitly prefixed with ai/agy!
+            # Smart Classification: Pure Bash commands run in Shell, everything else runs in agy AI!
             clean_p = prompt.strip()
             clean_p = re.sub(r"^(?:Task\s*\d+:|\d+[\.\)])\s*", "", clean_p).strip()
 
@@ -117,9 +117,38 @@ class AgyRunner:
                     start_time=start_time
                 )
 
-            is_ai = clean_p.lower().startswith(("ai ", "/ai ", "agy ", "/agy "))
+            bash_binary_names = {
+                "ls", "pwd", "df", "free", "uname", "whoami", "ps", "git",
+                "python", "python3", "pip", "pip3", "cat", "mkdir", "echo",
+                "find", "grep", "curl", "wget", "which", "head", "tail", "wc", "touch",
+                "cd", "rm", "cp", "mv", "chmod", "chown", "tar", "zip", "unzip",
+                "env", "export", "top", "htop", "tree", "node", "npm", "uptime", "id",
+                "clear", "kill", "sed", "awk", "ping", "traceroute", "systemctl", "docker", "apt"
+            }
 
-            if not is_ai:
+            chat_words = {
+                "karo", "batao", "dekh", "fix", "please", "kyu", "kya", "hai", "kaise", 
+                "banao", "likho", "samjhao", "hlo", "hello", "hi", "hey", "help", "who", 
+                "what", "how", "why", "write", "create", "make", "explain", "code", "generate"
+            }
+
+            first_word = clean_p.split()[0].lower() if clean_p else ""
+            has_chat_words = any(w in clean_p.lower().split() for w in chat_words)
+            has_ai_prefix = clean_p.lower().startswith(("ai ", "/ai ", "agy ", "/agy "))
+            has_bash_prefix = clean_p.startswith(("$ ", "bash ", "sh ", "./"))
+
+            # Determine whether it should run in bash shell
+            if has_ai_prefix:
+                is_bash = False
+            elif has_bash_prefix:
+                is_bash = True
+            elif first_word in bash_binary_names and not has_chat_words:
+                is_bash = True
+            else:
+                # Natural language, questions, greetings, AI instructions (no 'ai' prefix needed!)
+                is_bash = False
+
+            if is_bash:
                 cmd_to_run = clean_p
                 if cmd_to_run.startswith("$ "):
                     cmd_to_run = cmd_to_run[2:].strip()
