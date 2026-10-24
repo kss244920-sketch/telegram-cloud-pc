@@ -104,6 +104,21 @@ class AgyRunner:
             # Automatic checkpoint before task
             GitManager.create_checkpoint(project_dir, prompt)
 
+            # Keep TELEGRAM_STORAGE.md synchronized so agy knows all available files
+            try:
+                from storage_manager import storage_manager
+                manifest = storage_manager.load_manifest()
+                storage_manager.update_storage_doc(project_dir, manifest)
+
+                # If prompt mentions any file saved in Telegram storage that isn't on local disk, auto-restore it!
+                inbox_dir = project_dir / "inbox"
+                for item in manifest:
+                    fn = item.get("file_name")
+                    if fn and (fn in prompt or f"inbox/{fn}" in prompt) and not (inbox_dir / fn).exists():
+                        await storage_manager.ensure_file_present(bot, fn, inbox_dir)
+            except Exception as e:
+                logger.warning(f"Storage manifest update/restore warning: {e}")
+
             # Smart Classification: Pure Bash commands run in Shell, everything else runs in agy AI!
             clean_p = prompt.strip()
             clean_p = re.sub(r"^(?:Task\s*\d+:|\d+[\.\)])\s*", "", clean_p).strip()

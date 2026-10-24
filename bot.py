@@ -117,7 +117,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👉 **Direct Terminal Usage:**\n"
         "Seedha chat mein koi bhi shell command (`ls -la`, `pwd`, `python ...`, `pip ...`) ya AI prompt type karein.\n"
         "Ye message turant real-time live terminal window ban kar stream hoga!\n\n"
-        "Commands: `/session`, `/new`, `/stop`, `/login`, `/key`, `/get <file>`, `/backup`"
+        "Commands: `/session`, `/new`, `/stop`, `/storage`, `/login`, `/key`, `/get <file>`, `/backup`"
     )
     # Remove any leftover reply keyboard
     await update.message.reply_text(
@@ -192,7 +192,40 @@ async def get_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if matches and matches[0].is_file():
             await update.message.reply_document(document=open(matches[0], "rb"), caption=f"📄 {matches[0].name}")
         else:
-            await update.message.reply_text(f"❌ File `{fname}` nahi mili.")
+            # Check Telegram Storage Channel manifest and restore if available!
+            restored = await storage_manager.ensure_file_present(context.bot, fname, pdir / "inbox")
+            if restored and restored.exists():
+                await update.message.reply_document(
+                    document=open(restored, "rb"),
+                    caption=f"📄 {restored.name} (Restored from Telegram Cloud Storage)"
+                )
+            else:
+                await update.message.reply_text(f"❌ File `{fname}` workspace ya cloud storage channel mein nahi mili.")
+
+async def storage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth_or_reject(update):
+        return
+
+    manifest = storage_manager.load_manifest()
+    if not manifest:
+        await update.message.reply_text(
+            f"☁️ **Telegram Cloud Storage Channel:** `{config.STORAGE_CHANNEL_ID}`\n\nAbhi koi file stored nahi hai.",
+            parse_mode="Markdown"
+        )
+        return
+
+    lines = [
+        f"☁️ **Telegram Storage Files (Channel `{config.STORAGE_CHANNEL_ID}`):**\n"
+    ]
+    for item in manifest[-20:]:
+        fn = item.get("file_name", "file")
+        sz = item.get("size_kb", 0)
+        dt = item.get("uploaded_at", "")[:16].replace("T", " ")
+        lines.append(f"• `{fn}` ({sz} KB) - _{dt}_")
+
+    lines.append(f"\nTotal: {len(manifest)} files permanently stored.")
+    lines.append("Chat me paane ke liye: `/get <file_name>`")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 # ----------------- Auth Commands -----------------
 
@@ -356,6 +389,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/session` : Current session info\n"
         "• `/new` : Fresh conversation session start karein\n"
         "• `/stop` : Chal rahe process ko rokein\n"
+        "• `/storage` : Telegram storage channel ki saved files list\n"
         "• `/get <file>` : Workspace ki file chat mein maangein\n"
         "• `/backup` : Workspace snapshot storage channel par upload karein\n"
         "• `/login` & `/code` : Google OAuth login\n"
@@ -439,6 +473,10 @@ async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT
     elif message.photo:
         tg_file = await message.photo[-1].get_file()
         original_name = f"photo_{int(time.time())}.jpg"
+    elif message.sticker:
+        tg_file = await message.sticker.get_file()
+        ext = ".webm" if message.sticker.is_video else (".webp" if not message.sticker.is_animated else ".tgs")
+        original_name = f"sticker_{int(time.time())}{ext}"
 
     if not tg_file:
         return
@@ -452,7 +490,8 @@ async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT
         storage_manager.backup_file(
             bot=context.bot,
             file_path=saved_path,
-            caption=f"Upload: {original_name}" + (f" ({caption})" if caption else "")
+            caption=f"Upload: {original_name}" + (f" ({caption})" if caption else ""),
+            project_dir=pdir
         )
     )
 
@@ -593,6 +632,7 @@ def create_bot_application() -> Application:
     app.add_handler(CommandHandler("session", session_command))
     app.add_handler(CommandHandler("new", new_command))
     app.add_handler(CommandHandler("stop", stop_command))
+    app.add_handler(CommandHandler("storage", storage_command))
     app.add_handler(CommandHandler("backup", backup_command))
     app.add_handler(CommandHandler("get", get_command))
     app.add_handler(CommandHandler("login", login_command))
@@ -603,15 +643,17 @@ def create_bot_application() -> Application:
     # Callback Queries (Single Proceed button)
     app.add_handler(CallbackQueryHandler(callback_query_handler))
 
-    # Messages & Files (All Media: Documents, Videos, Audios, Voice, Animations, Photos)
+    # Messages & Files (Every File & Media: Documents, Videos, Audios, Voice, Animations, Photos, Stickers, Attachments)
     media_filters = (
-        filters.Document.ALL
+        filters.ATTACHMENT
+        | filters.Document.ALL
         | filters.PHOTO
         | filters.VIDEO
         | filters.AUDIO
         | filters.VOICE
         | filters.ANIMATION
         | filters.VIDEO_NOTE
+        | filters.Sticker.ALL
     )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     app.add_handler(MessageHandler(media_filters, handle_document_or_photo))
