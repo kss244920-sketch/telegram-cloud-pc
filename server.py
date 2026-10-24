@@ -74,12 +74,32 @@ async def lifespan(app: FastAPI):
 
     polling_task = asyncio.create_task(custom_polling_loop())
 
+    # 4-minute self-ping keepalive task to reset Render 15-min inactivity timer
+    pinger_task = None
+    async def internal_pinger():
+        external_url = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-cloud-pc-docker.onrender.com").rstrip("/")
+        ping_endpoint = f"{external_url}/health"
+        logger.info(f"Self-ping keepalive task started targeting {ping_endpoint}")
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            while not is_shutting_down:
+                await asyncio.sleep(240)  # 4 minutes
+                try:
+                    async with session.get(ping_endpoint, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                        logger.info(f"Self-ping keepalive: HTTP {resp.status} (Inactivity timer reset)")
+                except Exception as e:
+                    logger.warning(f"Self-ping notice: {e}")
+
+    pinger_task = asyncio.create_task(internal_pinger())
+
     yield
 
     logger.info("Shutting down Telegram Cloud PC service...")
     is_shutting_down = True
     if polling_task:
         polling_task.cancel()
+    if pinger_task:
+        pinger_task.cancel()
     await bot_app.stop()
     await bot_app.shutdown()
     logger.info("Shutdown complete.")

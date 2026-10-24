@@ -1,4 +1,5 @@
 .env
+render_config.json
 *.log
 __pycache__/
 *.pyc
