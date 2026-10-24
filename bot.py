@@ -374,6 +374,9 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     env = os.environ.copy()
     env["PAGER"] = "cat"
     env["SYSTEMD_PAGER"] = "cat"
+    env["COLUMNS"] = "5000"
+    env["LINES"] = "100"
+    env["TERM"] = "dumb"
 
     try:
         active_login_process = await asyncio.create_subprocess_exec(
@@ -385,28 +388,39 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         auth_url = ""
+        accumulated = ""
         start_time = time.time()
-        while time.time() - start_time < 20:
+        while time.time() - start_time < 25:
             line_bytes = await active_login_process.stdout.readline()
             if not line_bytes:
                 break
-            line = line_bytes.decode("utf-8", errors="ignore").strip()
-            if "https://accounts.google.com/o/oauth2/auth" in line:
-                for p in line.split():
-                    if p.startswith("https://accounts.google.com/o/oauth2/auth"):
-                        auth_url = p
-                        break
-                if auth_url:
-                    break
+            line = line_bytes.decode("utf-8", errors="ignore")
+            accumulated += line
+
+            match = re.search(r'https://accounts\.google\.com/o/oauth2/auth[^\s"\'\<\>\)]+', accumulated)
+            if match:
+                auth_url = match.group(0).strip().rstrip(".,;)")
+                break
 
         if auth_url:
+            login_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("👉 Click Here to Sign In (Google)", url=auth_url)]
+            ])
             text = (
-                "🔐 **Google Sign-In Link (Click karein):**\n\n"
-                f"[👉 Yahan Click Karke Login Karein]({auth_url})\n\n"
-                "Browser mein sign-in ke baad jo **Authorization Code** mile, use bhejein:\n"
-                "`/code <aapka_code>`"
+                "🔐 **Google Authentication Required!**\n\n"
+                "1. Neeche diye button par click karein ya URL browser mein kholein.\n"
+                "2. Google account se sign-in karke **Authorization Code** copy karein.\n"
+                "3. Chat mein bhejein:\n"
+                "`/code <aapka_code>`\n\n"
+                "🔗 **Direct Full Link (Tap to Copy):**\n"
+                f"`{auth_url}`"
             )
-            await msg.edit_text(text, parse_mode="Markdown")
+            await msg.edit_text(
+                text,
+                reply_markup=login_markup,
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
         else:
             await msg.edit_text(
                 "ℹ️ Agy pehle se authenticated hai ya direct API key mode active hai.\n\n"
@@ -433,7 +447,10 @@ async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         active_login_process.stdin.write(f"{code_val}\n".encode())
         await active_login_process.stdin.drain()
-        await asyncio.sleep(2)
+        try:
+            await asyncio.wait_for(active_login_process.wait(), timeout=6.0)
+        except Exception:
+            await asyncio.sleep(2)
 
         try:
             await update.message.delete()
