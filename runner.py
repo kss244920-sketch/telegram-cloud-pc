@@ -108,6 +108,15 @@ class AgyRunner:
             clean_p = prompt.strip()
             clean_p = re.sub(r"^(?:Task\s*\d+:|\d+[\.\)])\s*", "", clean_p).strip()
 
+            # If user types bare 'agy' in text chat without prompt
+            if clean_p.lower() == "agy":
+                return await self._run_bare_agy_help(
+                    bot=bot,
+                    chat_id=chat_id,
+                    live_message_id=live_message_id,
+                    start_time=start_time
+                )
+
             is_ai = clean_p.lower().startswith(("ai ", "/ai ", "agy ", "/agy "))
 
             if not is_ai:
@@ -142,6 +151,46 @@ class AgyRunner:
             self.is_running = False
             self.current_process = None
             keepalive_task.cancel()
+
+    async def _run_bare_agy_help(
+        self,
+        bot: Bot,
+        chat_id: int,
+        live_message_id: int,
+        start_time: float
+    ) -> dict:
+        """Displays guidance when user types bare 'agy' without a prompt."""
+        cwd = state.get_current_cwd()
+        dir_name = cwd.name or "workspace"
+
+        lines = [
+            "ℹ️ 'agy' ek full interactive TUI hai jo text chat me TTY maangta hai.",
+            "",
+            "👉 Text chat me aise chalayein:",
+            "  • ai <aapka prompt>  (e.g: ai ek bot script banao)",
+            "  • agy -p \"<aapka prompt>\"",
+            "",
+            "📱 Full Interactive agy (Visual TUI) ke liye:",
+            "  • Chat me /start dabakar 'Open Mini App' kholein!"
+        ]
+
+        box = format_terminal_box(
+            dir_name=dir_name,
+            prompt_line="agy",
+            output_lines=lines,
+            status_text="✅ Ready | Exit 0"
+        )
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=live_message_id,
+                text=mask_secrets(box),
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
+        return {"status": "success", "time": "0s", "response": ""}
 
     async def _run_bash_stream(
         self,
