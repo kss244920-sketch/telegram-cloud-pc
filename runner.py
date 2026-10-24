@@ -119,7 +119,53 @@ class AgyRunner:
                 await update_telegram(final=True)
                 return {"status": "failed", "error": "agy binary not found"}
 
-            # Build agy command line
+            # Check if prompt is a direct bash command
+            clean_p = prompt.strip()
+            if clean_p.startswith("$ "):
+                clean_p = clean_p[2:].strip()
+
+            first_word = clean_p.split()[0].lower() if clean_p else ""
+            bash_cmds = {
+                "ls", "pwd", "df", "free", "uname", "whoami", "ps", "git",
+                "python", "python3", "pip", "cat", "mkdir", "echo",
+                "find", "grep", "curl", "which", "head", "tail", "wc"
+            }
+            hindi_keywords = ["karo", "batao", "dekh", "fix", "please", "kyu", "kya", "hai", "kaise"]
+            is_bash = (
+                (first_word in bash_cmds and len(clean_p.split()) < 10 and not any(w in clean_p.lower() for w in hindi_keywords))
+                or prompt.strip().startswith("$ ")
+                or prompt.strip().startswith("bash ")
+            )
+
+            if is_bash:
+                # Direct bash terminal execution
+                display_lines.append(f"⚡ `$ {clean_p}`")
+                await update_telegram()
+                
+                cmd_to_run = clean_p.removeprefix("bash ").strip()
+                self.current_process = await asyncio.create_subprocess_shell(
+                    cmd_to_run,
+                    cwd=str(project_dir),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=env
+                )
+                stdout_data, _ = await self.current_process.communicate()
+                out_str = stdout_data.decode("utf-8", errors="ignore").strip()
+                
+                elapsed_sec = int(time.time() - start_time)
+                time_str = f"{elapsed_sec}s"
+                display_lines.append(f"✅ Output ({time_str})")
+                await update_telegram(final=True)
+                
+                formatted_resp = f"```\n{out_str or '(empty output)'}\n```"
+                return {
+                    "status": "success",
+                    "time": time_str,
+                    "response": formatted_resp,
+                }
+
+            # Otherwise, run full agy AI task
             cmd = [
                 agy_bin,
                 "-p", prompt,
@@ -130,22 +176,19 @@ class AgyRunner:
             if conversation_id:
                 cmd.extend(["--conversation", conversation_id])
 
-            env = os.environ.copy()
-            if config.GEMINI_API_KEY:
-                env["GEMINI_API_KEY"] = config.GEMINI_API_KEY
-
-            logger.info(f"Running command: {' '.join(cmd)} in {project_dir}")
+            logger.info(f"Running agy command: {' '.join(cmd)} in {project_dir}")
             
             self.current_process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(project_dir),
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
                 env=env
             )
 
             # Read stream NDJSON line by line
             final_response = ""
+            agent_deltas = []
             while True:
                 line_bytes = await self.current_process.stdout.readline()
                 if not line_bytes:
@@ -166,6 +209,8 @@ class AgyRunner:
                         if stype == "agent_response":
                             dur = su.get("duration_seconds", 0)
                             delta = su.get("text_delta", "")
+                            if delta:
+                                agent_deltas.append(delta)
                             if dur > 0:
                                 display_lines.append(f"🧠 Thought ({int(dur)}s)")
                             elif delta and "\n" in delta:
@@ -212,10 +257,13 @@ class AgyRunner:
             mins, secs = divmod(elapsed_sec, 60)
             time_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
 
+            if not final_response and agent_deltas:
+                final_response = "".join(agent_deltas).strip()
+
             if self.cancel_requested:
                 display_lines.append("🛑 Kaam user ne rok diya (/stop).")
                 await update_telegram(final=True)
-                return {"status": "stopped", "time": time_str}
+                return {"status": "stopped", "time": time_str, "response": "Task cancelled by user."}
 
             if return_code == 0:
                 display_lines.append(f"✅ Finished in {time_str}")
@@ -240,13 +288,18 @@ class AgyRunner:
                 return {
                     "status": "success",
                     "time": time_str,
-                    "response": final_response,
+                    "response": final_response or "✅ Task completed successfully.",
                     "git_status": commit_msg
                 }
             else:
-                display_lines.append(f"❌ Kaam fail hua (Code {return_code})")
+                display_lines.append(f"❌ Exit code {return_code}")
                 await update_telegram(final=True)
-                return {"status": "failed", "code": return_code, "time": time_str}
+                return {
+                    "status": "failed",
+                    "code": return_code,
+                    "time": time_str,
+                    "response": final_response or f"❌ Process exited with return code {return_code}"
+                }
 
         except Exception as e:
             logger.exception("Error running task")

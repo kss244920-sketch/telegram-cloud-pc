@@ -438,15 +438,17 @@ async def execute_terminal_task(
         )
 
         response_text = res.get("response", "").strip()
-        if response_text:
-            masked = mask_secrets(response_text)
-            # Split into chunks of <= 4000 chars for Telegram
-            chunks = [masked[i:i+4000] for i in range(0, len(masked), 4000)]
-            for chunk in chunks:
-                try:
-                    await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
-                except Exception:
-                    await bot.send_message(chat_id=chat_id, text=chunk)
+        if not response_text:
+            response_text = f"✅ Output: Process finished with status `{res.get('status', 'complete')}` ({res.get('time', '')})"
+
+        masked = mask_secrets(response_text)
+        # Split into chunks of <= 4000 chars for Telegram
+        chunks = [masked[i:i+4000] for i in range(0, len(masked), 4000)]
+        for chunk in chunks:
+            try:
+                await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
+            except Exception:
+                await bot.send_message(chat_id=chat_id, text=chunk)
 
     except Exception as e:
         logger.error(f"Error in execute_terminal_task: {e}")

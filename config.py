@@ -44,6 +44,8 @@ def restore_auth():
         import tarfile, io, base64
         # Restore into ~/.gemini/antigravity-cli
         dest_dirs = [
+            Path.home() / ".gemini",
+            Path("/root/.gemini"),
             Path.home() / ".gemini" / "antigravity-cli",
             Path("/root/.gemini/antigravity-cli")
         ]
