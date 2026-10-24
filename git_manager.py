@@ -38,13 +38,37 @@ class GitManager:
             code, _ = cls.run_git(["init"], project_dir)
             if code != 0:
                 return False
+            # Ensure git author identity is set
+            cls.run_git(["config", "user.name", "Cloud PC Agent"], project_dir)
+            cls.run_git(["config", "user.email", "cloud-pc@local.internal"], project_dir)
+
             # Create a default .gitignore inside project
             gitignore = project_dir / ".gitignore"
             if not gitignore.exists():
                 gitignore.write_text(".env\n__pycache__/\n*.pyc\n*.log\nused_proxies.txt\n")
             cls.run_git(["add", ".gitignore"], project_dir)
             cls.run_git(["commit", "-m", "chore: initial commit with gitignore"], project_dir)
+        else:
+            cls.run_git(["config", "user.name", "Cloud PC Agent"], project_dir)
+            cls.run_git(["config", "user.email", "cloud-pc@local.internal"], project_dir)
         return True
+
+    @classmethod
+    def clone_or_pull(cls, repo_url: str, target_dir: Path) -> tuple[bool, str]:
+        """Clones a GitHub repository if missing, or pulls latest changes if already cloned."""
+        if (target_dir / ".git").exists():
+            code, out = cls.run_git(["pull", "--rebase"], target_dir)
+            return code == 0, out
+
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        # Embed token safely if present
+        clone_url = repo_url
+        if config.GITHUB_TOKEN and "github.com" in repo_url:
+            clone_url = repo_url.replace("https://", f"https://oauth2:{config.GITHUB_TOKEN}@")
+
+        code, out = cls.run_git(["clone", clone_url, str(target_dir)], target_dir.parent)
+        cls.ensure_repo(target_dir)
+        return code == 0, out
 
     @classmethod
     def create_checkpoint(cls, project_dir: Path, task_title: str) -> tuple[bool, str]:
