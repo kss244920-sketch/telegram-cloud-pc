@@ -323,15 +323,14 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Clear AGY_AUTH_DATA on Render
     try:
-        import urllib.request, json
+        import urllib.request
         render_api_key = os.getenv("RENDER_API_KEY", "rnd_3tagyUF2IqkgZyiRiBHD7CbZjxAg")
         render_service_id = os.getenv("RENDER_SERVICE_ID", "srv-dbe4n88m7kps73capeog")
         url = f"https://api.render.com/v1/services/{render_service_id}/env-vars/AGY_AUTH_DATA"
         req = urllib.request.Request(
             url,
-            data=json.dumps({"value": ""}).encode("utf-8"),
-            headers={"Authorization": f"Bearer {render_api_key}", "Content-Type": "application/json"},
-            method="PUT"
+            headers={"Authorization": f"Bearer {render_api_key}"},
+            method="DELETE"
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             pass
@@ -381,7 +380,10 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         active_login_process = await asyncio.create_subprocess_exec(
-            agy_bin, "-p", "hello",
+            agy_bin,
+            "-p", "hello",
+            "--output-format", "stream-json",
+            "--dangerously-skip-permissions",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -392,15 +394,21 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         accumulated = ""
         start_time = time.time()
         while time.time() - start_time < 25:
-            line_bytes = await active_login_process.stdout.readline()
-            if not line_bytes:
-                break
-            line = line_bytes.decode("utf-8", errors="ignore")
-            accumulated += line
+            try:
+                chunk = await asyncio.wait_for(active_login_process.stdout.read(512), timeout=2.0)
+                if not chunk:
+                    break
+                line = chunk.decode("utf-8", errors="ignore")
+                accumulated += line
+            except asyncio.TimeoutError:
+                pass
 
             match = re.search(r'https://accounts\.google\.com/o/oauth2/auth[^\s"\'\<\>\)]+', accumulated)
             if match:
                 auth_url = match.group(0).strip().rstrip(".,;)")
+                break
+
+            if active_login_process.returncode is not None:
                 break
 
         if auth_url:
