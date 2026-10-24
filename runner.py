@@ -104,31 +104,17 @@ class AgyRunner:
             # Automatic checkpoint before task
             GitManager.create_checkpoint(project_dir, prompt)
 
-            # Detect if prompt is a direct bash command
+            # Pure Terminal by default: EVERYTHING runs in Bash unless explicitly prefixed with ai/agy!
             clean_p = prompt.strip()
             clean_p = re.sub(r"^(?:Task\s*\d+:|\d+[\.\)])\s*", "", clean_p).strip()
-            if clean_p.startswith("$ "):
-                clean_p = clean_p[2:].strip()
 
-            first_word = clean_p.split()[0].lower() if clean_p else ""
-            bash_cmds = {
-                "ls", "pwd", "df", "free", "uname", "whoami", "ps", "git",
-                "python", "python3", "pip", "pip3", "cat", "mkdir", "echo",
-                "find", "grep", "curl", "wget", "which", "head", "tail", "wc", "touch",
-                "cd", "rm", "cp", "mv", "chmod", "chown", "tar", "zip", "unzip",
-                "env", "export", "top", "htop", "tree", "node", "npm", "uptime", "id"
-            }
-            hindi_keywords = ["karo", "batao", "dekh", "fix", "please", "kyu", "kya", "hai", "kaise", "banao", "likho", "samjhao"]
-            is_bash = (
-                (first_word in bash_cmds and len(clean_p.split()) < 15 and not any(w in clean_p.lower() for w in hindi_keywords))
-                or prompt.strip().startswith("$ ")
-                or prompt.strip().startswith("bash ")
-                or prompt.strip().startswith("sh ")
-            )
+            is_ai = clean_p.lower().startswith(("ai ", "/ai ", "agy ", "/agy "))
 
-            if is_bash:
+            if not is_ai:
                 cmd_to_run = clean_p
-                if cmd_to_run.startswith("bash "):
+                if cmd_to_run.startswith("$ "):
+                    cmd_to_run = cmd_to_run[2:].strip()
+                elif cmd_to_run.startswith("bash "):
                     cmd_to_run = cmd_to_run[5:].strip()
                 elif cmd_to_run.startswith("sh "):
                     cmd_to_run = cmd_to_run[3:].strip()
@@ -141,8 +127,9 @@ class AgyRunner:
                     start_time=start_time
                 )
             else:
+                ai_prompt = re.sub(r"^(?:ai|/ai|agy|/agy)\s*", "", clean_p, flags=re.IGNORECASE).strip()
                 return await self._run_agy_stream(
-                    prompt=prompt,
+                    prompt=ai_prompt or clean_p,
                     project_dir=project_dir,
                     bot=bot,
                     chat_id=chat_id,
