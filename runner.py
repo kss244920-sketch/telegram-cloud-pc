@@ -119,6 +119,11 @@ class AgyRunner:
                 await update_telegram(final=True)
                 return {"status": "failed", "error": "agy binary not found"}
 
+            env = os.environ.copy()
+            if config.GEMINI_API_KEY:
+                env["GEMINI_API_KEY"] = config.GEMINI_API_KEY
+            env["PAGER"] = "cat"
+
             # Check if prompt is a direct bash command
             clean_p = prompt.strip()
             if clean_p.startswith("$ "):
