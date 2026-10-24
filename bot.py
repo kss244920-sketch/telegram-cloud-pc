@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import shutil
 import psutil
 from pathlib import Path
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo

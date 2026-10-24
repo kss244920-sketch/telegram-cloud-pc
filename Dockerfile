@@ -29,6 +29,6 @@ COPY . .
 # Workspace setup
 RUN mkdir -p /app/workspace /app/inbox /app/data
 
-EXPOSE 8000
+EXPOSE 10000
 
 CMD ["python", "main.py"]

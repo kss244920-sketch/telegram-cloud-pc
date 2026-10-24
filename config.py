@@ -20,7 +20,7 @@ ALLOWED_USERNAME = os.getenv("ALLOWED_USERNAME", "OwAtom").lower().lstrip("@")
 _allowed_user_id_raw = os.getenv("ALLOWED_USER_ID", "").strip()
 ALLOWED_USER_ID: int | None = int(_allowed_user_id_raw) if _allowed_user_id_raw.isdigit() else None
 
-PORT = int(os.getenv("PORT", "8000"))
+PORT = int(os.getenv("PORT", "10000"))
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
