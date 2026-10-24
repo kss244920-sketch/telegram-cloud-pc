@@ -192,9 +192,16 @@ def save_auth_bundle_to_render() -> bool:
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
             for item in cred_dir.iterdir():
-                # Don't pack huge brain conversation history or cache
                 if item.name not in ["brain", "cache", "log", "tmp"]:
                     tar.add(str(item), arcname=item.name)
+
+            # Ensure the crucial antigravity-oauth-token is included!
+            cli_dir = cred_dir / "antigravity-cli"
+            if cli_dir.exists():
+                for fname in ["antigravity-oauth-token", "installation_id", "settings.json", "jetski_state.pbtxt"]:
+                    fpath = cli_dir / fname
+                    if fpath.exists():
+                        tar.add(str(fpath), arcname=f"antigravity-cli/{fname}")
         buf.seek(0)
         b64_str = base64.b64encode(buf.read()).decode("utf-8")
 
