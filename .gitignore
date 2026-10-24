@@ -1,0 +1,9 @@
+.env
+*.log
+__pycache__/
+*.pyc
+inbox/
+workspace/
+.pytest_cache/
+*.db
+*.sqlite3
