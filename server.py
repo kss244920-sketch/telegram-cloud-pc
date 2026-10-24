@@ -144,13 +144,19 @@ async def check_agy_endpoint():
     
     try:
         proc = subprocess.run([agy_bin, "-p", "hi", "--output-format", "stream-json", "--dangerously-skip-permissions"],
-                              capture_output=True, text=True, timeout=20, env=env)
+                              capture_output=True, text=True, timeout=5, env=env)
         return {
             "returncode": proc.returncode,
             "stdout": proc.stdout[:1000],
             "stderr": proc.stderr[:1000],
             "files": files,
-            "auth_data_len": len(os.getenv("AGY_AUTH_DATA", ""))
+        }
+    except subprocess.TimeoutExpired as e:
+        return {
+            "timeout": True,
+            "stdout": (e.stdout or "")[:1500] if hasattr(e, "stdout") else "",
+            "stderr": (e.stderr or "")[:1500] if hasattr(e, "stderr") else "",
+            "files": files,
         }
     except Exception as e:
         return {"error": str(e), "files": files}

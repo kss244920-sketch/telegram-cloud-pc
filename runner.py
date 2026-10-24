@@ -284,6 +284,16 @@ class AgyRunner:
                         
                 except json.JSONDecodeError:
                     if len(line_str) > 0 and not line_str.startswith("{"):
+                        if "Authentication required" in line_str or "accounts.google.com/o/oauth2" in line_str:
+                            logger.warning(f"Auth required detected: {line_str}")
+                            display_lines.append("🔐 Auth required: /login ya /key karein.")
+                            await update_telegram(final=True)
+                            self.stop_current_task()
+                            return {
+                                "status": "auth_required",
+                                "time": f"{int(time.time() - start_time)}s",
+                                "response": "🔐 **Google Authentication Required!**\n\n1. Chat me `/login` likhein aur Google link par sign-in karein.\n2. Phir `/code <authorization_code>` bhejein.\n\n_Ya Gemini API Key use karne ke liye:_ `/key <AIzaSy...>`"
+                            }
                         clean_line = line_str.replace("`", "").strip()[:50]
                         if not clean_line.startswith("warning: conversation"):
                             display_lines.append(f"ℹ️ {clean_line}")
