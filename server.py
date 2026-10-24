@@ -39,31 +39,39 @@ async def lifespan(app: FastAPI):
     await bot_app.initialize()
     await bot_app.start()
 
-    # Resilient polling supervisor that handles Render zero-downtime rolling deploys
-    polling_task = None
+    # Direct resilient polling loop that seamlessly survives Render rolling deploys
     is_shutting_down = False
+    polling_task = None
 
-    async def supervisor():
+    async def custom_polling_loop():
+        offset = 0
+        bot = bot_app.bot
+        logger.info("Direct resilient Telegram polling loop started!")
         while not is_shutting_down:
             try:
-                if not bot_app.updater.running:
-                    logger.info("Starting Telegram Bot updater polling...")
-                    await bot_app.updater.start_polling(drop_pending_updates=False, poll_interval=0.5)
-                    logger.info("Telegram Bot polling active and listening!")
-                await asyncio.sleep(4)
+                updates = await bot.get_updates(
+                    offset=offset,
+                    timeout=8,
+                    allowed_updates=["message", "callback_query"]
+                )
+                for update in updates:
+                    offset = update.update_id + 1
+                    u_user = update.effective_user
+                    u_text = update.message.text if update.message else "(callback or file)"
+                    logger.info(f"Incoming Update #{update.update_id} from ID={u_user.id if u_user else 0} (@{u_user.username if u_user else 'None'}): {u_text[:40]}")
+                    asyncio.create_task(bot_app.process_update(update))
             except Exception as e:
                 err_str = str(e)
                 if "Conflict" in err_str:
-                    logger.warning("Telegram polling conflict (old container still terminating). Retrying in 4s...")
+                    logger.warning("Telegram Conflict: Previous container shutting down. Retrying in 3s...")
+                    await asyncio.sleep(3)
+                elif "TimedOut" in err_str or "NetworkError" in err_str:
+                    await asyncio.sleep(0.5)
                 else:
-                    logger.error(f"Polling supervisor error: {e}. Retrying in 4s...")
-                try:
-                    await bot_app.updater.stop()
-                except Exception:
-                    pass
-                await asyncio.sleep(4)
+                    logger.error(f"Polling error: {e}. Retrying in 2s...")
+                    await asyncio.sleep(2)
 
-    polling_task = asyncio.create_task(supervisor())
+    polling_task = asyncio.create_task(custom_polling_loop())
 
     yield
 
@@ -71,10 +79,6 @@ async def lifespan(app: FastAPI):
     is_shutting_down = True
     if polling_task:
         polling_task.cancel()
-    try:
-        await bot_app.updater.stop()
-    except Exception:
-        pass
     await bot_app.stop()
     await bot_app.shutdown()
     logger.info("Shutdown complete.")
