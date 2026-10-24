@@ -94,16 +94,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
         return
 
-    active_id = state.active_conversation_id
+    cwd = state.get_current_cwd()
     text = (
-        "💻 **Cloud PC Terminal Active!**\n\n"
+        "💻 **Cloud PC Real-Time Terminal Active!**\n\n"
         f"• **Owner**: @{config.ALLOWED_USERNAME} (Verified Lock ✅)\n"
-        f"• **Active Session**: `{active_id[:8]}`\n"
+        f"• **Working Directory**: `{cwd.name}`\n"
         f"• **Storage Node**: `{config.STORAGE_CHANNEL_ID}` (Connected ✅)\n\n"
-        "👉 **Kaise use karein:**\n"
-        "1. Chat mein koi bhi prompt, instruction ya files bhein.\n"
-        "2. Multiple baatein bhejne ke baad neeche **[▶️ PROCEED]** dabayein.\n"
-        "3. Live 10-events rolling terminal screen chalegi aur final answer aayega.\n\n"
+        "👉 **Direct Terminal Usage:**\n"
+        "Seedha chat mein koi bhi shell command (`ls -la`, `pwd`, `python ...`, `pip ...`) ya AI prompt type karein.\n"
+        "Ye message turant real-time live terminal window ban kar stream hoga!\n\n"
         "Commands: `/session`, `/new`, `/stop`, `/login`, `/key`, `/get <file>`, `/backup`"
     )
     # Remove any leftover reply keyboard
@@ -355,38 +354,53 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if runner.is_running:
-        await update.message.reply_text("⏳ Ek process terminal mein chal raha hai. /stop se rok sakte hain.")
+        cancel_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛑 Stop Running Task", callback_data="stop_current_task")]
+        ])
+        await update.message.reply_text(
+            "⏳ Ek process terminal mein pehle se chal raha hai. /stop karein ya neeche button dabayein.",
+            reply_markup=cancel_markup
+        )
         return
 
-    state.add_to_buffer(text, item_type="text")
-    buf_text, markup = render_buffer_text_and_markup()
+    # Direct instant terminal execution!
+    cwd = state.get_current_cwd()
+    dir_name = cwd.name or "workspace"
+    conv_id = state.active_conversation_id
 
-    if state.buffer_message_id:
-        try:
-            await context.bot.edit_message_text(
-                chat_id=update.effective_chat.id,
-                message_id=state.buffer_message_id,
-                text=buf_text,
-                reply_markup=markup,
-                parse_mode="Markdown"
-            )
-            return
-        except Exception:
-            pass
+    clean_preview = text.split("\n")[0][:35]
+    header = f"┌── 💻 Terminal [{dir_name}] "
+    header += "─" * max(1, 38 - len(header)) + "┐"
+    footer = "└── [⏳ Starting...] " + "─" * 16 + "┘"
+    initial_box = f"```text\n{header}\n$ {clean_preview}\n{footer}\n```"
 
-    msg = await update.message.reply_text(buf_text, reply_markup=markup, parse_mode="Markdown")
-    state.buffer_message_id = msg.message_id
+    cancel_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛑 Cancel", callback_data="stop_current_task")]
+    ])
+
+    live_msg = await update.message.reply_text(
+        initial_box,
+        reply_markup=cancel_markup,
+        parse_mode="Markdown"
+    )
+
+    asyncio.create_task(
+        execute_terminal_task(
+            prompt=text,
+            bot=context.bot,
+            chat_id=update.effective_chat.id,
+            live_message_id=live_msg.message_id,
+            conversation_id=conv_id,
+            project_dir=cwd
+        )
+    )
 
 async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
         return
 
-    if runner.is_running:
-        await update.message.reply_text("⏳ Ek process terminal mein chal raha hai. Pehle use khatam hone dein ya /stop karein.")
-        return
-
     message = update.message
-    caption = message.caption or ""
+    caption = (message.caption or "").strip()
     pdir = state.get_project_dir()
 
     tg_file = None
@@ -411,35 +425,35 @@ async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT
         storage_manager.backup_file(
             bot=context.bot,
             file_path=saved_path,
-            caption=f"Upload caption: {caption}" if caption else ""
+            caption=f"Upload: {original_name}" + (f" ({caption})" if caption else "")
         )
     )
 
-    item_title = f"{saved_info['name']} (file)" + (f": {caption}" if caption else "")
-    state.add_to_buffer(
-        text=f"File inbox/{saved_info['name']}" + (f" (caption: {caption})" if caption else ""),
-        item_type="file",
-        file_name=saved_info["name"],
-        size_kb=saved_info["size_kb"]
-    )
-
-    buf_text, markup = render_buffer_text_and_markup()
-
-    if state.buffer_message_id:
-        try:
-            await context.bot.edit_message_text(
+    size_kb = saved_info.get("size_kb", 0)
+    if caption:
+        # If user attached an instruction with the file, run it directly in terminal!
+        full_prompt = f"File {saved_info['rel_path']} uploaded. Instruction: {caption}"
+        live_msg = await update.message.reply_text(
+            f"```text\n┌── 💻 Terminal [file-task] ───────────────┐\n$ {caption[:30]}\n└── [⏳ Starting...] ─────────────────────┘\n```",
+            parse_mode="Markdown"
+        )
+        asyncio.create_task(
+            execute_terminal_task(
+                prompt=full_prompt,
+                bot=context.bot,
                 chat_id=update.effective_chat.id,
-                message_id=state.buffer_message_id,
-                text=buf_text,
-                reply_markup=markup,
-                parse_mode="Markdown"
+                live_message_id=live_msg.message_id,
+                conversation_id=state.active_conversation_id,
+                project_dir=pdir
             )
-            return
-        except Exception:
-            pass
-
-    msg = await update.message.reply_text(buf_text, reply_markup=markup, parse_mode="Markdown")
-    state.buffer_message_id = msg.message_id
+        )
+    else:
+        text = (
+            f"📥 **File Saved!**\n"
+            f"• Path: `{saved_info['rel_path']}` ({size_kb} KB)\n\n"
+            f"💡 Ab terminal me koi bhi command (jaise `python inbox/{saved_info['name']}`) ya instruction bhejein."
+        )
+        await update.message.reply_text(text, parse_mode="Markdown")
 
 # ----------------- Execution Pipeline -----------------
 
@@ -462,17 +476,15 @@ async def execute_terminal_task(
         )
 
         response_text = res.get("response", "").strip()
-        if not response_text:
-            response_text = f"✅ Output: Process finished with status `{res.get('status', 'complete')}` ({res.get('time', '')})"
-
-        masked = mask_secrets(response_text)
-        # Split into chunks of <= 4000 chars for Telegram
-        chunks = [masked[i:i+4000] for i in range(0, len(masked), 4000)]
-        for chunk in chunks:
-            try:
-                await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
-            except Exception:
-                await bot.send_message(chat_id=chat_id, text=chunk)
+        # Only send response if not empty (for bash tasks, output is already in terminal block)
+        if response_text:
+            masked = mask_secrets(response_text)
+            chunks = [masked[i:i+4000] for i in range(0, len(masked), 4000)]
+            for chunk in chunks:
+                try:
+                    await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
+                except Exception:
+                    await bot.send_message(chat_id=chat_id, text=chunk)
 
     except Exception as e:
         logger.error(f"Error in execute_terminal_task: {e}")
@@ -480,8 +492,6 @@ async def execute_terminal_task(
             await bot.send_message(chat_id=chat_id, text=f"❌ Execution error: {e}")
         except Exception:
             pass
-    finally:
-        state.buffer_message_id = None
 
 # ----------------- Callback Queries -----------------
 
@@ -492,7 +502,14 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     await query.answer()
     data = query.data or ""
-    pdir = state.get_project_dir()
+
+    if data == "stop_current_task":
+        if runner.is_running:
+            runner.stop_current_task()
+            await query.answer("🛑 Process roka ja raha hai...", show_alert=True)
+        else:
+            await query.answer("Koi process running nahi hai.", show_alert=False)
+        return
 
     if data == "run_proceed":
         if runner.is_running:
@@ -503,40 +520,20 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.answer("Buffer khali hai!", show_alert=True)
             return
 
-        # Combine buffered items into prompt
-        if len(state.prompt_buffer) == 1:
-            combined_prompt = state.prompt_buffer[0]["text"]
-        else:
-            prompt_lines = []
-            for i, item in enumerate(state.prompt_buffer, 1):
-                prompt_lines.append(f"{i}. {item['text']}")
-            combined_prompt = "\n".join(prompt_lines)
-
+        combined_prompt = state.prompt_buffer[0]["text"] if len(state.prompt_buffer) == 1 else "\n".join(x["text"] for x in state.prompt_buffer)
         state.clear_buffer()
         conv_id = state.active_conversation_id
-        cid_display = conv_id[:8] if conv_id else "session"
+        cwd = state.get_current_cwd()
 
-        header = f"💻 agy terminal [{cid_display}]\n" + "─" * 30
-        clean_prompt_preview = combined_prompt.split('\n')[0][:40]
-        start_text = f"```\n{header}\n🚀 Task shuru hua: {clean_prompt_preview}\n```"
-        try:
-            await query.edit_message_text(start_text, parse_mode="Markdown")
-        except Exception:
-            try:
-                await query.edit_message_text(f"{header}\n🚀 Task shuru hua: {clean_prompt_preview}")
-            except Exception:
-                pass
-
-        chat_id = update.effective_chat.id
         live_msg_id = query.message.message_id
         asyncio.create_task(
             execute_terminal_task(
                 prompt=combined_prompt,
                 bot=context.bot,
-                chat_id=chat_id,
+                chat_id=update.effective_chat.id,
                 live_message_id=live_msg_id,
                 conversation_id=conv_id,
-                project_dir=pdir
+                project_dir=cwd
             )
         )
 

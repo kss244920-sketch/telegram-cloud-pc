@@ -83,6 +83,44 @@ class StateManager:
         pdir.mkdir(parents=True, exist_ok=True)
         return pdir
 
+    def get_current_cwd(self) -> Path:
+        if not hasattr(self, "_current_cwd") or self._current_cwd is None:
+            self._current_cwd = self.get_project_dir()
+        if not self._current_cwd.exists():
+            self._current_cwd = self.get_project_dir()
+        return self._current_cwd
+
+    def set_current_cwd(self, p: Path):
+        self._current_cwd = p
+
+    def change_directory(self, target_str: str) -> tuple[bool, str]:
+        target_str = target_str.strip()
+        curr = self.get_current_cwd()
+        if not target_str or target_str == "~":
+            new_path = self.get_project_dir()
+        elif target_str == "..":
+            # Don't go outside WORKSPACE_DIR if possible, or allow going up
+            if curr != config.WORKSPACE_DIR:
+                new_path = curr.parent
+            else:
+                new_path = curr
+        else:
+            p = Path(target_str)
+            if p.is_absolute():
+                new_path = p
+            else:
+                new_path = (curr / p).resolve()
+
+        if new_path.exists() and new_path.is_dir():
+            self.set_current_cwd(new_path)
+            try:
+                rel = new_path.relative_to(config.WORKSPACE_DIR)
+                disp = "~" if str(rel) == "." else f"~/{rel}"
+                return True, disp
+            except ValueError:
+                return True, str(new_path)
+        return False, f"Directory not found: {target_str}"
+
     def add_history_entry(self, entry: dict):
         entry["timestamp"] = datetime.utcnow().isoformat()
         self.history.append(entry)
