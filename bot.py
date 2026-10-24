@@ -121,7 +121,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👉 **Direct Terminal Usage:**\n"
         "Seedha chat mein koi bhi shell command (`ls -la`, `pwd`, `python ...`, `pip ...`) ya AI prompt type karein.\n"
         "Ye message turant real-time live terminal window ban kar stream hoga!\n\n"
-        "Commands: `/session`, `/new`, `/stop`, `/storage`, `/login`, `/logout`, `/key`, `/get <file>`, `/backup`"
+        "Commands: `/session`, `/new`, `/stop`, `/storage`, `/login`, `/logout`, `/key`, `/rotate`, `/get <file>`, `/backup`"
     )
     # Remove any leftover reply keyboard
     await update.message.reply_text(
@@ -506,22 +506,65 @@ async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
         return
 
-    args = context.args or []
-    if not args:
-        await update.message.reply_text("Usage: `/key AIzaSy...`", parse_mode="Markdown")
+    raw_text = update.message.text.replace("/key", "", 1).strip()
+    extracted_keys = re.findall(r'AIzaSy[a-zA-Z0-9_\-]{30,}', raw_text)
+    if not extracted_keys:
+        args = context.args or []
+        if args:
+            extracted_keys = [a.strip() for a in args if a.strip()]
+
+    if not extracted_keys:
+        pool_len = len(state.api_keys)
+        if pool_len > 0:
+            active_k = state.get_active_api_key()
+            masked_k = mask_secrets(active_k)
+            lines = [
+                f"🔑 **Gemini API Key Pool ({pool_len} accounts active):**\n",
+                f"• Active Key: `{masked_k}` (Account #{state.active_key_index + 1})",
+                f"• Auto-Quota Failover: **ON ✅**\n",
+                "Nayi keys add karne ke liye: `/key <key1> <key2> <key3>...`",
+                "Next account par switch karne ke liye: `/rotate`"
+            ]
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        else:
+            await update.message.reply_text(
+                "Usage: `/key AIzaSy... [AIzaSy2...] [AIzaSy3...]`\n\n"
+                "💡 Aap ek sath 4-5 accounts ki keys space dekar bhej sakte hain!\n"
+                "Quota khatam hote hi bot automatically next account par switch kar lega.",
+                parse_mode="Markdown"
+            )
         return
 
-    new_key = args[0].strip()
-    config.GEMINI_API_KEY = new_key
-    os.environ["GEMINI_API_KEY"] = new_key
-    state.save()
+    state.set_api_keys(extracted_keys)
 
     try:
         await update.message.delete()
     except Exception:
         pass
 
-    await update.effective_chat.send_message("✅ API Key successfully set ho gayi aur secure kar di gayi!")
+    if len(extracted_keys) > 1:
+        await update.effective_chat.send_message(
+            f"✅ **{len(extracted_keys)} Accounts ki API Keys pool mein add ho gayi!**\n\n"
+            f"• Currently Active: Account #1\n"
+            f"• Auto-Failover: Agar kisi account ka quota khatam hua to bot **automatically next account** par switch karke chat continue rakhega! 🚀\n\n"
+            "Status dekhne ke liye: `/key` ya switch ke liye: `/rotate`"
+        )
+    else:
+        await update.effective_chat.send_message("✅ API Key successfully set ho gayi aur secure kar di gayi!")
+
+async def rotate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth_or_reject(update):
+        return
+
+    if not state.api_keys or len(state.api_keys) <= 1:
+        await update.message.reply_text("ℹ️ Pool mein sirf 1 key hai. Nayi keys add karne ke liye: `/key <k1> <k2>...`")
+        return
+
+    next_k = state.rotate_api_key()
+    masked = mask_secrets(next_k)
+    await update.message.reply_text(
+        f"🔄 Manually switched to Account Key #{state.active_key_index + 1}/{len(state.api_keys)} (`{masked}`)!"
+    )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
@@ -788,6 +831,7 @@ def create_bot_application() -> Application:
     app.add_handler(CommandHandler("logout", logout_command))
     app.add_handler(CommandHandler("code", code_command))
     app.add_handler(CommandHandler("key", key_command))
+    app.add_handler(CommandHandler("rotate", rotate_command))
     app.add_handler(CommandHandler("help", help_command))
 
     # Callback Queries (Single Proceed button)

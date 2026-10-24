@@ -446,8 +446,9 @@ class AgyRunner:
             return {"status": "success" if ok else "failed", "time": "0s", "response": ""}
 
         env = os.environ.copy()
-        if config.GEMINI_API_KEY:
-            env["GEMINI_API_KEY"] = config.GEMINI_API_KEY
+        active_key = state.get_active_api_key()
+        if active_key:
+            env["GEMINI_API_KEY"] = active_key
         env["PAGER"] = "cat"
         env["TERM"] = "xterm-256color"
 
@@ -572,8 +573,9 @@ class AgyRunner:
             return {"status": "failed", "error": "agy binary not found", "response": "❌ `agy` binary nahi mila."}
 
         env = os.environ.copy()
-        if config.GEMINI_API_KEY:
-            env["GEMINI_API_KEY"] = config.GEMINI_API_KEY
+        active_key = state.get_active_api_key()
+        if active_key:
+            env["GEMINI_API_KEY"] = active_key
         env["PAGER"] = "cat"
 
         cmd = [
@@ -669,7 +671,46 @@ class AgyRunner:
 
             except json.JSONDecodeError:
                 if len(line_str) > 0 and not line_str.startswith("{"):
+                    # Detect Quota exhaustion and auto-rotate account API keys seamlessly!
+                    quota_patterns = [
+                        "resource_exhausted", "quota exceeded", "rate limit", "429",
+                        "resourceexhausted", "exhausted your capacity", "quota limit"
+                    ]
+                    is_quota = any(qp in line_str.lower() for qp in quota_patterns)
+                    if is_quota and state.api_keys and len(state.api_keys) > 1:
+                        next_k = state.rotate_api_key()
+                        if next_k:
+                            display_lines.append(f"🔄 Quota reached: Switched to Key #{state.active_key_index + 1}/{len(state.api_keys)}")
+                            await update_msg(final=False)
+                            self.stop_current_task()
+                            return await self._run_agy_stream(
+                                prompt=prompt,
+                                project_dir=project_dir,
+                                bot=bot,
+                                chat_id=chat_id,
+                                live_message_id=live_message_id,
+                                conversation_id=conversation_id,
+                                start_time=start_time
+                            )
+
                     if "Authentication required" in line_str or "accounts.google.com/o/oauth2" in line_str:
+                        # If we have an API key pool, try using the first/next key before failing!
+                        if state.api_keys:
+                            next_k = state.rotate_api_key() if len(state.api_keys) > 1 else state.get_active_api_key()
+                            if next_k:
+                                display_lines.append(f"🔄 Using API Key #{state.active_key_index + 1}...")
+                                await update_msg(final=False)
+                                self.stop_current_task()
+                                return await self._run_agy_stream(
+                                    prompt=prompt,
+                                    project_dir=project_dir,
+                                    bot=bot,
+                                    chat_id=chat_id,
+                                    live_message_id=live_message_id,
+                                    conversation_id=conversation_id,
+                                    start_time=start_time
+                                )
+
                         display_lines.append("🔐 Auth required: /login ya /key karein.")
                         await update_msg(final=True, status_override="🔐 Auth Required")
                         self.stop_current_task()

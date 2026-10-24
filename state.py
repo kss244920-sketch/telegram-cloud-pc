@@ -21,6 +21,8 @@ class StateManager:
         self.last_terminal_output = ""
         self.was_restarted = False
         self.last_chat_id: int | None = 8327850869
+        self.api_keys: list[str] = []
+        self.active_key_index: int = 0
         
         self.load()
 
@@ -75,6 +77,43 @@ class StateManager:
             self.save()
             return True
         return False
+
+    def get_active_api_key(self) -> str:
+        if not self.api_keys:
+            return config.GEMINI_API_KEY or ""
+        if self.active_key_index >= len(self.api_keys):
+            self.active_key_index = 0
+        return self.api_keys[self.active_key_index]
+
+    def rotate_api_key(self) -> str | None:
+        """Rotates to next available API key upon quota exhaustion."""
+        if not self.api_keys or len(self.api_keys) <= 1:
+            return None
+        self.active_key_index = (self.active_key_index + 1) % len(self.api_keys)
+        next_key = self.api_keys[self.active_key_index]
+        config.GEMINI_API_KEY = next_key
+        os.environ["GEMINI_API_KEY"] = next_key
+        self.save()
+        logger.info(f"Auto-rotated to API key index {self.active_key_index + 1}/{len(self.api_keys)}")
+        return next_key
+
+    def set_api_keys(self, keys: list[str]):
+        clean_keys = [k.strip() for k in keys if k.strip()]
+        if clean_keys:
+            self.api_keys = clean_keys
+            self.active_key_index = 0
+            config.GEMINI_API_KEY = clean_keys[0]
+            os.environ["GEMINI_API_KEY"] = clean_keys[0]
+            self.save()
+
+    def add_api_key(self, key: str):
+        clean = key.strip()
+        if clean and clean not in self.api_keys:
+            self.api_keys.append(clean)
+            if not config.GEMINI_API_KEY:
+                config.GEMINI_API_KEY = clean
+                os.environ["GEMINI_API_KEY"] = clean
+            self.save()
 
     def list_conversations(self) -> list[dict]:
         return list(self.conversations.values())
@@ -141,6 +180,8 @@ class StateManager:
             "chat_history": self.chat_history,
             "allowed_user_id": config.ALLOWED_USER_ID,
             "last_chat_id": self.last_chat_id,
+            "api_keys": self.api_keys,
+            "active_key_index": self.active_key_index,
             "last_save": datetime.utcnow().isoformat(),
         }
         try:
@@ -168,6 +209,13 @@ class StateManager:
                 config.set_allowed_user_id(data["allowed_user_id"])
             if data.get("last_chat_id"):
                 self.last_chat_id = data["last_chat_id"]
+            if data.get("api_keys"):
+                self.api_keys = data["api_keys"]
+                self.active_key_index = data.get("active_key_index", 0)
+                active_k = self.get_active_api_key()
+                if active_k:
+                    config.GEMINI_API_KEY = active_k
+                    os.environ["GEMINI_API_KEY"] = active_k
             
             # If state file was loaded, mark restart recovery
             self.was_restarted = True
