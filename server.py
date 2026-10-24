@@ -132,6 +132,29 @@ async def health():
 async def debug_logs_api():
     return {"logs": list(LOG_BUFFER)}
 
+@app.get("/api/check-agy")
+async def check_agy_endpoint():
+    agy_bin = shutil.which("agy") or "/usr/local/bin/agy"
+    env = os.environ.copy()
+    env["PAGER"] = "cat"
+    files = {}
+    for p in ["/root/.gemini", "/root/.gemini/antigravity-cli", str(Path.home() / ".gemini")]:
+        if os.path.exists(p):
+            files[p] = os.listdir(p)
+    
+    try:
+        proc = subprocess.run([agy_bin, "-p", "hi", "--output-format", "stream-json", "--dangerously-skip-permissions"],
+                              capture_output=True, text=True, timeout=20, env=env)
+        return {
+            "returncode": proc.returncode,
+            "stdout": proc.stdout[:1000],
+            "stderr": proc.stderr[:1000],
+            "files": files,
+            "auth_data_len": len(os.getenv("AGY_AUTH_DATA", ""))
+        }
+    except Exception as e:
+        return {"error": str(e), "files": files}
+
 @app.get("/status")
 async def status_api():
     used_mb, total_mb, cpu = get_memory_info()
