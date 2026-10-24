@@ -78,7 +78,21 @@ def render_buffer_text_and_markup() -> tuple[str | None, InlineKeyboardMarkup | 
     lines = [f"📥 **Input Buffer ({count} item{'s' if count > 1 else ''}):**"]
     for i, item in enumerate(state.prompt_buffer, 1):
         if item.get("type") == "file":
-            lines.append(f"{i}. 📄 `{item['file_name']}` ({item.get('size_kb', 0)} KB)")
+            fname = item.get("file_name", "file")
+            ext = Path(fname).suffix.lower()
+            if ext in [".mp3", ".ogg", ".wav", ".m4a"]:
+                icon = "🎵"
+            elif ext in [".mp4", ".mov", ".mkv", ".webm"]:
+                icon = "🎬"
+            elif ext == ".apk":
+                icon = "📱"
+            elif ext in [".jpg", ".png", ".jpeg", ".webp"]:
+                icon = "🖼️"
+            elif ext in [".zip", ".tar", ".gz"]:
+                icon = "📦"
+            else:
+                icon = "📄"
+            lines.append(f"{i}. {icon} `{fname}` ({item.get('size_kb', 0)} KB)")
         else:
             lines.append(f"{i}. \"{item['text'][:80]}\"")
 
@@ -407,6 +421,21 @@ async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT
     if message.document:
         tg_file = await message.document.get_file()
         original_name = message.document.file_name or "document"
+    elif message.video:
+        tg_file = await message.video.get_file()
+        original_name = message.video.file_name or f"video_{int(time.time())}.mp4"
+    elif message.audio:
+        tg_file = await message.audio.get_file()
+        original_name = message.audio.file_name or f"audio_{int(time.time())}.mp3"
+    elif message.voice:
+        tg_file = await message.voice.get_file()
+        original_name = f"voice_{int(time.time())}.ogg"
+    elif message.animation:
+        tg_file = await message.animation.get_file()
+        original_name = message.animation.file_name or f"animation_{int(time.time())}.mp4"
+    elif message.video_note:
+        tg_file = await message.video_note.get_file()
+        original_name = f"video_note_{int(time.time())}.mp4"
     elif message.photo:
         tg_file = await message.photo[-1].get_file()
         original_name = f"photo_{int(time.time())}.jpg"
@@ -574,8 +603,17 @@ def create_bot_application() -> Application:
     # Callback Queries (Single Proceed button)
     app.add_handler(CallbackQueryHandler(callback_query_handler))
 
-    # Messages & Files
+    # Messages & Files (All Media: Documents, Videos, Audios, Voice, Animations, Photos)
+    media_filters = (
+        filters.Document.ALL
+        | filters.PHOTO
+        | filters.VIDEO
+        | filters.AUDIO
+        | filters.VOICE
+        | filters.ANIMATION
+        | filters.VIDEO_NOTE
+    )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-    app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_document_or_photo))
+    app.add_handler(MessageHandler(media_filters, handle_document_or_photo))
 
     return app
