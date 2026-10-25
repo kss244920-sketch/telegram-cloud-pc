@@ -323,8 +323,12 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"Failed to remove {target}: {e}")
 
+    # Clear API keys & modelProvider
+    state.clear_api_keys(sync_render=True)
+    config.configure_agy_settings(use_gemini_api=False)
     config.GEMINI_API_KEY = ""
     os.environ.pop("GEMINI_API_KEY", None)
+    os.environ.pop("GEMINI_API_KEYS", None)
 
     # Clear AGY_AUTH_DATA on Render
     try:
@@ -346,12 +350,10 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         "🚪 **Successfully Logged Out!**\n\n"
-        "Purana Google account / session clear ho gaya hai.\n\n"
+        "Google account, OAuth session aur Gemini API keys poori tarah clear kar di gayi hain.\n\n"
         "👉 **Naya account connect karne ke liye:**\n"
-        "1. Chat mein `/login` bhejein\n"
-        "2. Naye Gmail account se sign-in karke code lein\n"
-        "3. `/code <authorization_code>` bhejein\n\n"
-        "Ya Gemini API key set karein: `/key <API_KEY>`"
+        "1. Google Sign-in: `/login`\n"
+        "2. Ya Gemini API Key: `/key <API_KEY>`"
     )
     await msg.edit_text(text, parse_mode="Markdown")
 
@@ -360,23 +362,31 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
         return
 
-    args = [x.lower() for x in (context.args or [])]
-    force_new = "force" in args or "new" in args
-
-    # If force, perform logout cleanup first
-    if force_new:
-        target_dirs = [Path.home() / ".gemini", Path("/root/.gemini")]
-        for d in target_dirs:
-            for f in ["oauth_creds.json", "google_accounts.json", "antigravity-cli/antigravity-oauth-token"]:
-                t = d / f
-                if t.exists():
-                    try: t.unlink()
-                    except Exception: pass
-
     msg = await update.message.reply_text("⏳ Google OAuth Sign-in link generate ho rahi hai...")
+
+    if active_login_process:
+        try:
+            active_login_process.terminate()
+        except Exception:
+            pass
+        active_login_process = None
+
+    # Always ensure existing expired/stale tokens are cleared so agy generates a fresh consent URL
+    target_dirs = [Path.home() / ".gemini", Path("/root/.gemini")]
+    for d in target_dirs:
+        for f in ["oauth_creds.json", "google_accounts.json", "antigravity-cli/antigravity-oauth-token"]:
+            t = d / f
+            if t.exists():
+                try: t.unlink()
+                except Exception: pass
+
+    # Clear Gemini API mode in settings.json so agy runs Google OAuth flow
+    config.configure_agy_settings(use_gemini_api=False)
 
     agy_bin = shutil.which("agy") or "/usr/local/bin/agy"
     env = os.environ.copy()
+    env.pop("GEMINI_API_KEY", None)
+    env.pop("GEMINI_API_KEYS", None)
     env["PAGER"] = "cat"
     env["SYSTEMD_PAGER"] = "cat"
     env["COLUMNS"] = "5000"
@@ -397,46 +407,33 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         auth_url = ""
         accumulated = ""
+        start_wait = time.time()
 
-        async def read_stream(stream):
-            nonlocal accumulated, auth_url
-            while active_login_process and not auth_url:
-                try:
-                    chunk = await asyncio.wait_for(stream.read(512), timeout=1.0)
-                    if not chunk:
-                        if active_login_process.returncode is not None:
-                            break
-                        await asyncio.sleep(0.3)
-                        continue
-                    text = chunk.decode("utf-8", errors="ignore")
-                    accumulated += text
-                    match = re.search(r'https://accounts\.google\.com/o/oauth2/auth[^\s"\'\<\>\)]+', accumulated)
-                    if match:
-                        auth_url = match.group(0).strip().rstrip(".,;)")
-                        break
-                except asyncio.TimeoutError:
+        # agy outputs the consent URL to stderr while waiting for auth on stdin
+        while (time.time() - start_wait) < 18.0 and not auth_url:
+            try:
+                line_bytes = await asyncio.wait_for(active_login_process.stderr.readline(), timeout=2.0)
+                if not line_bytes:
                     if active_login_process.returncode is not None:
                         break
-                except Exception:
+                    await asyncio.sleep(0.2)
+                    continue
+                line_str = line_bytes.decode("utf-8", errors="ignore").strip()
+                accumulated += line_str + "\n"
+                match = re.search(r'https://accounts\.google\.com/o/oauth2/auth[^\s"\'\<\>\)]+', line_str)
+                if match:
+                    auth_url = match.group(0).strip().rstrip(".,;)")
                     break
-
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(
-                    read_stream(active_login_process.stdout),
-                    read_stream(active_login_process.stderr)
-                ),
-                timeout=18.0
-            )
-        except asyncio.TimeoutError:
-            pass
-
-        logger.info(f"Login process output length: {len(accumulated)}, auth_url found: {bool(auth_url)}")
+            except asyncio.TimeoutError:
+                if active_login_process.returncode is not None:
+                    break
 
         if not auth_url and accumulated:
             match = re.search(r'https://accounts\.google\.com/o/oauth2/auth[^\s"\'\<\>\)]+', accumulated)
             if match:
                 auth_url = match.group(0).strip().rstrip(".,;)")
+
+        logger.info(f"Login process output length: {len(accumulated)}, auth_url found: {bool(auth_url)}")
 
         if auth_url:
             login_markup = InlineKeyboardMarkup([
@@ -460,18 +457,24 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             if "Authentication required" in accumulated or "Waiting for authentication" in accumulated:
                 await msg.edit_text(
-                    f"🔐 **Sign-In Link Generated:**\n\n```text\n{accumulated.strip()}\n```\n\n"
+                    f"🔐 **Sign-In Link Generated:**\n\n```text\n{accumulated.strip()[:2000]}\n```\n\n"
                     "Code copy karke bhejein: `/code <authorization_code>`",
                     parse_mode="Markdown"
                 )
+            elif accumulated.strip():
+                await msg.edit_text(
+                    f"ℹ️ **Output from agy:**\n\n```text\n{accumulated.strip()[:2000]}\n```\n\n"
+                    "👉 Naya sign-in karne ke liye: `/logout` karein, phir `/login` karein."
+                )
             else:
                 await msg.edit_text(
-                    "ℹ️ Agy pehle se authenticated hai ya direct API key mode active hai.\n\n"
+                    "ℹ️ Agy session active hai ya direct API key mode active hai.\n\n"
                     "👉 Kisi naye Google account se switch karne ke liye:\n"
                     "• `/logout` karein, phir `/login` karein\n"
-                    "• Ya seedha `/login force` karein!"
+                    "• Ya seedha `/key <API_KEY>` se Gemini API key set karein!"
                 )
     except Exception as e:
+        logger.exception("Error in login_command")
         await msg.edit_text(f"❌ Error: {e}")
 
 async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -491,7 +494,7 @@ async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         active_login_process.stdin.write(f"{code_val}\n".encode())
         await active_login_process.stdin.drain()
         try:
-            await asyncio.wait_for(active_login_process.wait(), timeout=6.0)
+            await asyncio.wait_for(active_login_process.wait(), timeout=8.0)
         except Exception:
             await asyncio.sleep(2)
 
@@ -500,11 +503,16 @@ async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+        # Google OAuth successfully connected, so clear any failed Gemini API key mode
+        state.clear_api_keys(sync_render=True)
+        config.configure_agy_settings(use_gemini_api=False)
+
         saved = save_auth_bundle_to_render()
         save_note = "\n\n✅ Credentials Render environment mein permanently save ho gaye!" if saved else ""
-        await status_msg.edit_text(f"✅ Login successfully complete ho gaya!{save_note}")
+        await status_msg.edit_text(f"✅ Login successfully complete ho gaya! Google account connected.{save_note}")
         active_login_process = None
     except Exception as e:
+        logger.exception("Error in code_command")
         await status_msg.edit_text(f"❌ Verification failed: {e}")
 
 async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

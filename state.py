@@ -133,12 +133,15 @@ class StateManager:
                     except Exception:
                         pass
 
-                    val = ",".join(self.api_keys)
-                    active = self.get_active_api_key()
-                    payload_list = existing_vars + [
-                        {"key": "GEMINI_API_KEYS", "value": val},
-                        {"key": "GEMINI_API_KEY", "value": active}
-                    ]
+                    if self.api_keys:
+                        val = ",".join(self.api_keys)
+                        active = self.get_active_api_key()
+                        payload_list = existing_vars + [
+                            {"key": "GEMINI_API_KEYS", "value": val},
+                            {"key": "GEMINI_API_KEY", "value": active}
+                        ]
+                    else:
+                        payload_list = existing_vars
                     payload = json.dumps(payload_list).encode("utf-8")
                     req = urllib.request.Request(
                         url,
@@ -147,7 +150,7 @@ class StateManager:
                         method="PUT"
                     )
                     with urllib.request.urlopen(req, timeout=10) as resp:
-                        logger.info(f"Successfully synced {len(self.api_keys)} API keys to Render env vars without overwriting others!")
+                        logger.info(f"Successfully synced API keys to Render env vars without overwriting others!")
             except Exception as e:
                 logger.warning(f"Failed to sync API keys to Render: {e}")
 
@@ -166,6 +169,7 @@ class StateManager:
             self.active_key_index = 0
             config.GEMINI_API_KEY = clean_keys[0]
             os.environ["GEMINI_API_KEY"] = clean_keys[0]
+            config.configure_agy_settings(use_gemini_api=True)
             self.save()
             if sync_render:
                 self.sync_keys_to_render()
@@ -177,6 +181,7 @@ class StateManager:
             if not config.GEMINI_API_KEY:
                 config.GEMINI_API_KEY = clean
                 os.environ["GEMINI_API_KEY"] = clean
+            config.configure_agy_settings(use_gemini_api=True)
             self.save()
             if sync_render:
                 self.sync_keys_to_render()
@@ -186,6 +191,8 @@ class StateManager:
         self.active_key_index = 0
         config.GEMINI_API_KEY = ""
         os.environ.pop("GEMINI_API_KEY", None)
+        os.environ.pop("GEMINI_API_KEYS", None)
+        config.configure_agy_settings(use_gemini_api=False)
         self.save()
         if sync_render:
             self.sync_keys_to_render()

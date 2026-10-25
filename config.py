@@ -47,13 +47,46 @@ def set_allowed_user_id(user_id: int):
     global ALLOWED_USER_ID
     ALLOWED_USER_ID = user_id
 
+def configure_agy_settings(use_gemini_api: bool = False):
+    """
+    Configures ~/.gemini/antigravity-cli/settings.json and /root/.gemini/antigravity-cli/settings.json
+    so that agy knows whether to use Gemini API keys directly or use Google OAuth authentication.
+    """
+    import json
+    dest_dirs = [
+        Path.home() / ".gemini" / "antigravity-cli",
+        Path("/root/.gemini/antigravity-cli")
+    ]
+    for d in dest_dirs:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            settings_path = d / "settings.json"
+            data = {}
+            if settings_path.exists():
+                try:
+                    with open(settings_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+            if use_gemini_api:
+                data["modelProvider"] = "gemini"
+            else:
+                data.pop("modelProvider", None)
+
+            with open(settings_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            pass
+
 def restore_auth():
     """Restores agy authentication bundle from environment variable if present, only when not in API key mode."""
     # When API keys are configured, skip OAuth bundle restore so agy uses GEMINI_API_KEY directly!
     if os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEYS"):
+        configure_agy_settings(use_gemini_api=True)
         return
     raw_b64 = os.getenv("AGY_AUTH_DATA", "").strip()
     if not raw_b64:
+        configure_agy_settings(use_gemini_api=False)
         return
     try:
         import tarfile, io, base64
@@ -70,8 +103,9 @@ def restore_auth():
                     tar.extractall(path=dest)
             except Exception:
                 pass
+        configure_agy_settings(use_gemini_api=False)
     except Exception as e:
         print("Failed to restore agy auth bundle:", e)
 
-# Unpack auth if available
+# Unpack auth or configure mode
 restore_auth()
