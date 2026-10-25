@@ -22,6 +22,19 @@ def strip_ansi(text: str) -> str:
     """Removes ANSI color and control codes for clean Telegram display."""
     return ANSI_ESCAPE_RE.sub('', text)
 
+def is_quota_error(text: str) -> bool:
+    """Detects quota exceeded, rate limits, 429, or resource exhaustion across CLI outputs."""
+    if not text:
+        return False
+    t = text.lower()
+    patterns = [
+        "resource_exhausted", "resourceexhausted", "quota exceeded", "quota_exceeded",
+        "quota limit", "rate limit", "ratelimit", "rate_limit", "429",
+        "exhausted your capacity", "daily quota", "spend cap", "prepaid credits",
+        "too many requests", "capacity exceeded", "quota_limit"
+    ]
+    return any(p in t for p in patterns)
+
 def format_terminal_box(
     dir_name: str,
     prompt_line: str,
@@ -505,7 +518,8 @@ class AgyRunner:
         chat_id: int,
         live_message_id: int,
         conversation_id: str | None,
-        start_time: float
+        start_time: float,
+        attempt: int = 1
     ) -> dict:
         """Runs full agy AI task with live terminal event streaming."""
         agy_bin = self.find_agy_binary()
@@ -601,6 +615,58 @@ class AgyRunner:
         final_response = ""
         agent_deltas = []
 
+        async def handle_quota_rotation(reason_str: str) -> dict | None:
+            pool_len = len(state.api_keys)
+            if pool_len > 1 and attempt < pool_len:
+                prev_idx = state.active_key_index
+                next_k = state.rotate_api_key()
+                curr_idx = state.active_key_index
+                display_lines.append(f"🔄 Quota reached on Key #{prev_idx + 1}!")
+                display_lines.append(f"⚡ Auto-switched to Key #{curr_idx + 1}/{pool_len}")
+                display_lines.append("🚀 Retrying prompt automatically...")
+                await update_msg(final=False)
+                self.stop_current_task()
+                return await self._run_agy_stream(
+                    prompt=prompt,
+                    project_dir=project_dir,
+                    bot=bot,
+                    chat_id=chat_id,
+                    live_message_id=live_message_id,
+                    conversation_id=conversation_id,
+                    start_time=start_time,
+                    attempt=attempt + 1
+                )
+            elif pool_len > 0 and attempt >= pool_len:
+                display_lines.append(f"❌ Sabhi {pool_len} accounts ka Quota exceed ho gaya!")
+                await update_msg(final=True, status_override="❌ All Keys Quota Exceeded")
+                self.stop_current_task()
+                return {
+                    "status": "quota_exhausted",
+                    "time": "0s",
+                    "response": (
+                        f"⚠️ **Sabhi {pool_len} Accounts ka Daily Quota Limit Exceed ho gaya hai!**\n\n"
+                        "Aapke pool ki saari Gemini API Keys limit hit kar chuki hain.\n\n"
+                        "👉 **Solution:** Naye Gmail account ki API key generate karke add karein:\n"
+                        "`/key <AIzaSy_new_key>`\n\n"
+                        "Ya Google quota reset (kal) hone ka wait karein."
+                    )
+                }
+            else:
+                display_lines.append("❌ Quota Limit Exceeded!")
+                await update_msg(final=True, status_override="❌ Quota Limit Exceeded")
+                self.stop_current_task()
+                return {
+                    "status": "quota_exhausted",
+                    "time": "0s",
+                    "response": (
+                        "⚠️ **Account ka Quota Limit Exceeded ho gaya!**\n\n"
+                        "Pool mein koi doosra backup account set nahi hai.\n\n"
+                        "👉 **Solution:** Apne 4-5 Gmail accounts ki Gemini API keys chat mein add karein:\n"
+                        "`/key <AIzaSy_1> <AIzaSy_2> <AIzaSy_3>...`\n\n"
+                        "Bot unhe automatically pool me save karke instant failover rotation start kar dega! 🚀"
+                    )
+                }
+
         while True:
             line_bytes = await self.current_process.stdout.readline()
             if not line_bytes:
@@ -609,6 +675,12 @@ class AgyRunner:
             line_str = line_bytes.decode("utf-8", errors="ignore").strip()
             if not line_str:
                 continue
+
+            # Early Quota detection on raw stream line
+            if is_quota_error(line_str):
+                ret = await handle_quota_rotation(line_str)
+                if ret:
+                    return ret
 
             try:
                 event = json.loads(line_str)
@@ -626,6 +698,11 @@ class AgyRunner:
                 elif ev_type == "step_update":
                     su = event.get("step_update", {})
                     stype = su.get("step_type")
+
+                    if is_quota_error(su.get("error", "")):
+                        ret = await handle_quota_rotation(su.get("error", ""))
+                        if ret:
+                            return ret
 
                     if stype == "agent_response":
                         dur = su.get("duration_seconds", 0)
@@ -669,34 +746,21 @@ class AgyRunner:
                     final_response = res.get("response", "")
                     if res.get("usage"):
                         last_known_tokens = res.get("usage")
+                    if res.get("status") in ["ERROR", "FAILED"] or is_quota_error(res.get("error", "")) or is_quota_error(final_response):
+                        ret = await handle_quota_rotation(res.get("error", "") or final_response or "Result Error")
+                        if ret:
+                            return ret
 
             except json.JSONDecodeError:
                 if len(line_str) > 0 and not line_str.startswith("{"):
-                    # Detect Quota exhaustion and auto-rotate account API keys seamlessly!
-                    quota_patterns = [
-                        "resource_exhausted", "quota exceeded", "rate limit", "429",
-                        "resourceexhausted", "exhausted your capacity", "quota limit"
-                    ]
-                    is_quota = any(qp in line_str.lower() for qp in quota_patterns)
-                    if is_quota and state.api_keys and len(state.api_keys) > 1:
-                        next_k = state.rotate_api_key()
-                        if next_k:
-                            display_lines.append(f"🔄 Quota reached: Switched to Key #{state.active_key_index + 1}/{len(state.api_keys)}")
-                            await update_msg(final=False)
-                            self.stop_current_task()
-                            return await self._run_agy_stream(
-                                prompt=prompt,
-                                project_dir=project_dir,
-                                bot=bot,
-                                chat_id=chat_id,
-                                live_message_id=live_message_id,
-                                conversation_id=conversation_id,
-                                start_time=start_time
-                            )
+                    if is_quota_error(line_str):
+                        ret = await handle_quota_rotation(line_str)
+                        if ret:
+                            return ret
 
                     if "Authentication required" in line_str or "accounts.google.com/o/oauth2" in line_str:
                         # If we have an API key pool, try using the first/next key before failing!
-                        if state.api_keys:
+                        if state.api_keys and attempt <= len(state.api_keys):
                             next_k = state.rotate_api_key() if len(state.api_keys) > 1 else state.get_active_api_key()
                             if next_k:
                                 display_lines.append(f"🔄 Using API Key #{state.active_key_index + 1}...")
@@ -709,7 +773,8 @@ class AgyRunner:
                                     chat_id=chat_id,
                                     live_message_id=live_message_id,
                                     conversation_id=conversation_id,
-                                    start_time=start_time
+                                    start_time=start_time,
+                                    attempt=attempt + 1
                                 )
 
                         display_lines.append("🔐 Auth required: /login ya /key karein.")
@@ -727,6 +792,13 @@ class AgyRunner:
 
         await self.current_process.wait()
         return_code = self.current_process.returncode or 0
+
+        # Post-execution Quota/API failure check
+        if return_code != 0:
+            if is_quota_error(final_response) or return_code == 3:
+                ret = await handle_quota_rotation(f"Process Exit {return_code}")
+                if ret:
+                    return ret
 
         elapsed_sec = int(time.time() - start_time)
         mins, secs = divmod(elapsed_sec, 60)

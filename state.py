@@ -1,3 +1,5 @@
+import os
+import re
 import json
 import uuid
 import logging
@@ -17,7 +19,9 @@ class StateManager:
         self.conversations = {}
         self.prompt_buffer = []  # list of items waiting for Proceed
         self.buffer_message_id: int | None = None
+        self.queue = []
         self.history = []
+        self.chat_history = {}
         self.last_terminal_output = ""
         self.was_restarted = False
         self.last_chat_id: int | None = 8327850869
@@ -97,16 +101,60 @@ class StateManager:
         logger.info(f"Auto-rotated to API key index {self.active_key_index + 1}/{len(self.api_keys)}")
         return next_key
 
-    def set_api_keys(self, keys: list[str]):
-        clean_keys = [k.strip() for k in keys if k.strip()]
+    def sync_keys_to_render(self):
+        """Asynchronously syncs current key pool to Render environment so it persists across container rebuilds."""
+        import os, threading
+        def _sync():
+            try:
+                render_api_key = os.getenv("RENDER_API_KEY", "")
+                render_service_id = os.getenv("RENDER_SERVICE_ID", "")
+                if not render_api_key or not render_service_id:
+                    rc_path = config.BASE_DIR / "render_config.json"
+                    if rc_path.exists():
+                        with open(rc_path) as f:
+                            rc = json.load(f)
+                            render_api_key = render_api_key or rc.get("api_key")
+                            render_service_id = render_service_id or rc.get("service_id")
+                if render_api_key and render_service_id:
+                    import urllib.request
+                    val = ",".join(self.api_keys)
+                    active = self.get_active_api_key()
+                    url = f"https://api.render.com/v1/services/{render_service_id}/env-vars"
+                    payload = json.dumps([
+                        {"key": "GEMINI_API_KEYS", "value": val},
+                        {"key": "GEMINI_API_KEY", "value": active}
+                    ]).encode("utf-8")
+                    req = urllib.request.Request(
+                        url,
+                        data=payload,
+                        headers={"Authorization": f"Bearer {render_api_key}", "Content-Type": "application/json"},
+                        method="PUT"
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        logger.info(f"Successfully synced {len(self.api_keys)} API keys to Render env vars!")
+            except Exception as e:
+                logger.warning(f"Failed to sync API keys to Render: {e}")
+
+        threading.Thread(target=_sync, daemon=True).start()
+
+    def set_api_keys(self, keys: list[str], sync_render: bool = True):
+        # Keep unique in order
+        clean_keys = []
+        for k in keys:
+            k_clean = k.strip()
+            if k_clean and k_clean not in clean_keys:
+                clean_keys.append(k_clean)
+
         if clean_keys:
             self.api_keys = clean_keys
             self.active_key_index = 0
             config.GEMINI_API_KEY = clean_keys[0]
             os.environ["GEMINI_API_KEY"] = clean_keys[0]
             self.save()
+            if sync_render:
+                self.sync_keys_to_render()
 
-    def add_api_key(self, key: str):
+    def add_api_key(self, key: str, sync_render: bool = True):
         clean = key.strip()
         if clean and clean not in self.api_keys:
             self.api_keys.append(clean)
@@ -114,6 +162,17 @@ class StateManager:
                 config.GEMINI_API_KEY = clean
                 os.environ["GEMINI_API_KEY"] = clean
             self.save()
+            if sync_render:
+                self.sync_keys_to_render()
+
+    def clear_api_keys(self, sync_render: bool = True):
+        self.api_keys = []
+        self.active_key_index = 0
+        config.GEMINI_API_KEY = ""
+        os.environ.pop("GEMINI_API_KEY", None)
+        self.save()
+        if sync_render:
+            self.sync_keys_to_render()
 
     def list_conversations(self) -> list[dict]:
         return list(self.conversations.values())
@@ -192,6 +251,9 @@ class StateManager:
 
     def load(self):
         if not STATE_FILE.exists():
+            initial_keys = config.get_initial_api_keys()
+            if initial_keys:
+                self.set_api_keys(initial_keys, sync_render=False)
             return
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -216,6 +278,10 @@ class StateManager:
                 if active_k:
                     config.GEMINI_API_KEY = active_k
                     os.environ["GEMINI_API_KEY"] = active_k
+            else:
+                initial_keys = config.get_initial_api_keys()
+                if initial_keys:
+                    self.set_api_keys(initial_keys, sync_render=False)
             
             # If state file was loaded, mark restart recovery
             self.was_restarted = True

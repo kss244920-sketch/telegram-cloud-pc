@@ -23,6 +23,18 @@ ALLOWED_USER_ID: int | None = int(_allowed_user_id_raw) if _allowed_user_id_raw.
 PORT = int(os.getenv("PORT", "8000"))
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "")
+
+def get_initial_api_keys() -> list[str]:
+    """Extract initial list of API keys from env vars."""
+    keys = []
+    raw = os.getenv("GEMINI_API_KEYS", "")
+    if raw:
+        import re
+        keys = [k.strip() for k in re.split(r"[\s,;]+", raw) if k.strip()]
+    if not keys and GEMINI_API_KEY:
+        keys = [GEMINI_API_KEY.strip()]
+    return keys
 
 _channel_id_raw = os.getenv("STORAGE_CHANNEL_ID", "-1004343308436").strip()
 try:

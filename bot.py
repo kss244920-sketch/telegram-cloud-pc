@@ -521,21 +521,26 @@ async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not extracted_keys:
         pool_len = len(state.api_keys)
         if pool_len > 0:
-            active_k = state.get_active_api_key()
-            masked_k = mask_secrets(active_k)
             lines = [
-                f"🔑 **Gemini API Key Pool ({pool_len} accounts active):**\n",
-                f"• Active Key: `{masked_k}` (Account #{state.active_key_index + 1})",
-                f"• Auto-Quota Failover: **ON ✅**\n",
-                "Nayi keys add karne ke liye: `/key <key1> <key2> <key3>...`",
-                "Next account par switch karne ke liye: `/rotate`"
+                f"🔑 **Gemini API Key Pool ({pool_len} accounts active):**\n"
             ]
+            for idx, k in enumerate(state.api_keys):
+                masked = mask_secrets(k)
+                status = "✅ ACTIVE" if idx == state.active_key_index else "⏳ STANDBY"
+                lines.append(f"• Account #{idx + 1}: `{masked}` [{status}]")
+            lines.append("\n• Auto-Quota Failover: **ACTIVE 🚀** (Quota khatam hote hi agla account turant chalega)")
+            lines.append("• Render Cloud Sync: **PERSISTENT ✅** (Reboot par bhi safe)\n")
+            lines.append("👉 Nayi keys add karne ke liye: `/key <k1> <k2> <k3>...`")
+            lines.append("👉 Next account par rotate karne ke liye: `/rotate`")
+            lines.append("👉 Saari keys hatane ke liye: `/clear_keys`")
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
         else:
             await update.message.reply_text(
+                "🔑 **Gemini API Key Pool Khali Hai!**\n\n"
                 "Usage: `/key AIzaSy... [AIzaSy2...] [AIzaSy3...]`\n\n"
-                "💡 Aap ek sath 4-5 accounts ki keys space dekar bhej sakte hain!\n"
-                "Quota khatam hote hi bot automatically next account par switch kar lega.",
+                "💡 **Multi-Account Failover:**\n"
+                "Aap apne 4-5 Gmail accounts ki Gemini API keys space ya newline dekar ek sath bhej sakte hain.\n"
+                "Jese hi kisi ek account ka quota khatam hoga, bot **automatically agle account par switch** karke chat continue rakhega! 🚀",
                 parse_mode="Markdown"
             )
         return
@@ -549,13 +554,18 @@ async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(extracted_keys) > 1:
         await update.effective_chat.send_message(
-            f"✅ **{len(extracted_keys)} Accounts ki API Keys pool mein add ho gayi!**\n\n"
+            f"✅ **{len(extracted_keys)} Accounts ki API Keys pool mein add & Render par sync ho gayi!**\n\n"
             f"• Currently Active: Account #1\n"
-            f"• Auto-Failover: Agar kisi account ka quota khatam hua to bot **automatically next account** par switch karke chat continue rakhega! 🚀\n\n"
+            f"• Auto-Quota Rotation: **Active 🚀** (Ek account ka quota exceed hote hi bot automatically next account par switch karega)\n"
+            f"• Persistent: Render cloud environment mein permanently saved ✅\n\n"
             "Status dekhne ke liye: `/key` ya switch ke liye: `/rotate`"
         )
     else:
-        await update.effective_chat.send_message("✅ API Key successfully set ho gayi aur secure kar di gayi!")
+        await update.effective_chat.send_message(
+            "✅ **1 API Key pool mein add ho gayi!**\n\n"
+            "💡 Agar quota exceed issue se bachna hai, to aap 4-5 accounts ki keys ek sath bhej sakte hain:\n"
+            "`/key <key1> <key2> <key3>...`"
+        )
 
 async def rotate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
@@ -569,6 +579,17 @@ async def rotate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     masked = mask_secrets(next_k)
     await update.message.reply_text(
         f"🔄 Manually switched to Account Key #{state.active_key_index + 1}/{len(state.api_keys)} (`{masked}`)!"
+    )
+
+async def clear_keys_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth_or_reject(update):
+        return
+
+    state.clear_api_keys()
+    await update.message.reply_text(
+        "🗑️ **Gemini API Key Pool Clear ho gaya!**\n\n"
+        "Render environment se bhi keys remove kar di gayi hain.\n"
+        "Nayi keys add karne ke liye: `/key <key1> <key2>...`"
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -586,7 +607,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/backup` : Workspace snapshot storage channel par upload karein\n"
         "• `/login` & `/code` : Google OAuth login\n"
         "• `/logout` : Current Google account logout karein (switch account)\n"
-        "• `/key <API_KEY>` : Gemini API Key set karein\n\n"
+        "• `/key [k1 k2...]` : Gemini API key pool view ya add karein (Multi-account failover)\n"
+        "• `/rotate` : Agle API account par manually switch karein\n"
+        "• `/clear_keys` : Saari API keys reset karein\n\n"
         "💡 **Chat Execution:** Chat mein messages/files bhein, aur **[▶️ PROCEED]** dabayein!"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -857,6 +880,7 @@ def create_bot_application() -> Application:
     app.add_handler(CommandHandler("code", code_command))
     app.add_handler(CommandHandler("key", key_command))
     app.add_handler(CommandHandler("rotate", rotate_command))
+    app.add_handler(CommandHandler("clear_keys", clear_keys_command))
     app.add_handler(CommandHandler("help", help_command))
 
     # Callback Queries (Single Proceed button)
