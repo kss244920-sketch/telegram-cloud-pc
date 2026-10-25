@@ -329,6 +329,8 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     config.GEMINI_API_KEY = ""
     os.environ.pop("GEMINI_API_KEY", None)
     os.environ.pop("GEMINI_API_KEYS", None)
+    os.environ["USER_LOGGED_OUT"] = "1"
+    os.environ.pop("AGY_AUTH_DATA", None)
 
     # Clear AGY_AUTH_DATA on Render
     try:
@@ -350,10 +352,12 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         "🚪 **Successfully Logged Out!**\n\n"
-        "Google account, OAuth session aur Gemini API keys poori tarah clear kar di gayi hain.\n\n"
-        "👉 **Naya account connect karne ke liye:**\n"
-        "1. Google Sign-in: `/login`\n"
-        "2. Ya Gemini API Key: `/key <API_KEY>`"
+        "AI session aur credentials clear ho gaye hain.\n\n"
+        "👉 **Naya account connect karne ke do aasan tareeqe:**\n"
+        "1. **Gemini API Key (Recommended):**\n"
+        "   `/key <AIzaSy_key>`\n"
+        "2. **Pehle wala Google account wapas jodna:**\n"
+        "   `/login restore`"
     )
     await msg.edit_text(text, parse_mode="Markdown")
 
@@ -362,30 +366,67 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
         return
 
-    # First, if AGY_AUTH_DATA is in environment, ensure it is unpacked
-    if os.getenv("AGY_AUTH_DATA"):
-        config.restore_auth()
-
-    # Check if we already have working OAuth credentials or active API keys
-    token_dirs = [Path.home() / ".gemini", Path("/root/.gemini")]
-    has_oauth = any((d / "antigravity-cli/antigravity-oauth-token").exists() for d in token_dirs)
-    has_api_keys = bool(state.api_keys)
-
-    # Check if force flag is passed: /login force
     args = context.args or []
     force_reauth = len(args) > 0 and args[0].lower() in ["force", "new", "reset"]
+    restore_requested = len(args) > 0 and args[0].lower() in ["restore", "saved"]
+
+    token_dirs = [Path.home() / ".gemini", Path("/root/.gemini")]
+
+    # If user explicitly requested restore of saved credentials
+    if restore_requested:
+        os.environ.pop("USER_LOGGED_OUT", None)
+        config.restore_auth()
+        has_oauth = any((d / "antigravity-cli/antigravity-oauth-token").exists() for d in token_dirs)
+        if has_oauth:
+            await update.message.reply_text(
+                "✅ <b>Google Account session restore ho gayi!</b>\n\n"
+                "• Status: Ready & Active 🚀\n"
+                "Aap seedha chat me prompt ya Linux command likh sakte hain!",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        else:
+            await update.message.reply_text(
+                "ℹ️ Saved session nahi mili. Gemini API key set karein:\n"
+                "<code>/key &lt;API_KEY&gt;</code>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+    # If user hasn't explicitly logged out in this session, ensure auth is restored
+    if os.getenv("AGY_AUTH_DATA") and os.environ.get("USER_LOGGED_OUT") != "1":
+        has_any = any((d / "antigravity-cli/antigravity-oauth-token").exists() for d in token_dirs)
+        if not has_any:
+            config.restore_auth()
+
+    # Check if we already have working OAuth credentials or active API keys
+    has_oauth = any((d / "antigravity-cli/antigravity-oauth-token").exists() for d in token_dirs)
+    has_api_keys = bool(state.api_keys)
 
     if (has_oauth or has_api_keys) and not force_reauth:
         mode_desc = f"Gemini API Key Pool ({len(state.api_keys)} keys)" if has_api_keys else "Google Account (OAuth)"
         text = (
-            "✅ <b>Agy pehle se successfully authenticated hai!</b>\n\n"
+            "✅ <b>Agy pehle se successfully authenticated aur ready hai!</b>\n\n"
             f"• <b>Active Auth Mode:</b> <code>{mode_desc}</code>\n"
             "• <b>Status:</b> Ready & Active 🚀\n\n"
-            "Aap seedha chat mein koi bhi prompt ya Linux command bhej sakte hain!\n\n"
-            "👉 <b>Useful Shortcuts:</b>\n"
-            "• API Keys add karne ke liye: <code>/key &lt;API_KEY&gt;</code>\n"
-            "• Naye account se login karne ke liye: <code>/logout</code> phir <code>/login</code>\n"
-            "• Direct re-authenticate karne ke liye: <code>/login force</code>"
+            "👉 <b>Aapko login karne ya <code>agy</code> likhne ki koi zaroorat nahi hai.</b>\n"
+            "Aap seedha chat mein koi bhi prompt ya command bhej sakte hain (jaise <i>\"Hi\"</i> ya <i>\"ek telegram bot banao\"</i>)!\n\n"
+            "💡 <b>Multi-Account Failover:</b>\n"
+            "Quota exceed se bachne ke liye aap apne accounts ki API keys add kar sakte hain:\n"
+            "<code>/key &lt;API_KEY_1&gt; &lt;API_KEY_2&gt;...</code>"
+        )
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+        return
+
+    # If user logged out and not force
+    if os.environ.get("USER_LOGGED_OUT") == "1" and not force_reauth:
+        text = (
+            "ℹ️ <b>Aap abhi logged out hain!</b>\n\n"
+            "👉 <b>Connect karne ke tareeqe:</b>\n"
+            "1. <b>Gemini API Key lagayein (Fast & Multi-Account):</b>\n"
+            "   <code>/key &lt;AIzaSy_key&gt;</code>\n\n"
+            "2. <b>Pehle wala Google account wapas connect karein:</b>\n"
+            "   <code>/login restore</code>\n"
         )
         await update.message.reply_text(text, parse_mode=ParseMode.HTML)
         return

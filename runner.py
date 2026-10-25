@@ -253,18 +253,19 @@ class AgyRunner:
         live_message_id: int,
         start_time: float
     ) -> dict:
-        """Displays guidance when user types bare 'agy' without a prompt."""
+        """Displays friendly guidance when user types bare 'agy' without a prompt."""
         cwd = state.get_current_cwd()
         dir_name = cwd.name or "workspace"
 
         lines = [
-            "ℹ️ 'agy' ek full interactive TUI hai jo text chat me TTY maangta hai.",
+            "✅ AI Terminal pehle se active aur ready hai!",
             "",
-            "👉 Text chat me aise chalayein:",
-            "  • ai <aapka prompt>  (e.g: ai ek bot script banao)",
-            "  • agy -p \"<aapka prompt>\"",
+            "👉 Aapko 'agy' command likhne ki zaroorat nahi hai.",
+            "Seedha chat me apna prompt ya Linux command likhein:",
+            "  • AI Prompt: \"Hi\", \"ek bot banao\", \"python script likho\"",
+            "  • Linux command: \"ls -la\", \"pwd\", \"pip list\"",
             "",
-            "📱 Full Interactive agy (Visual TUI) ke liye:",
+            "📱 Fullscreen Interactive Web Terminal:",
             "  • Chat me /start dabakar 'Open Mini App' kholein!"
         ]
 
