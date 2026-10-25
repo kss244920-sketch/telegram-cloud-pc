@@ -362,6 +362,34 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
         return
 
+    # First, if AGY_AUTH_DATA is in environment, ensure it is unpacked
+    if os.getenv("AGY_AUTH_DATA"):
+        config.restore_auth()
+
+    # Check if we already have working OAuth credentials or active API keys
+    token_dirs = [Path.home() / ".gemini", Path("/root/.gemini")]
+    has_oauth = any((d / "antigravity-cli/antigravity-oauth-token").exists() for d in token_dirs)
+    has_api_keys = bool(state.api_keys)
+
+    # Check if force flag is passed: /login force
+    args = context.args or []
+    force_reauth = len(args) > 0 and args[0].lower() in ["force", "new", "reset"]
+
+    if (has_oauth or has_api_keys) and not force_reauth:
+        mode_desc = f"Gemini API Key Pool ({len(state.api_keys)} keys)" if has_api_keys else "Google Account (OAuth)"
+        text = (
+            "✅ <b>Agy pehle se successfully authenticated hai!</b>\n\n"
+            f"• <b>Active Auth Mode:</b> <code>{mode_desc}</code>\n"
+            "• <b>Status:</b> Ready & Active 🚀\n\n"
+            "Aap seedha chat mein koi bhi prompt ya Linux command bhej sakte hain!\n\n"
+            "👉 <b>Useful Shortcuts:</b>\n"
+            "• API Keys add karne ke liye: <code>/key &lt;API_KEY&gt;</code>\n"
+            "• Naye account se login karne ke liye: <code>/logout</code> phir <code>/login</code>\n"
+            "• Direct re-authenticate karne ke liye: <code>/login force</code>"
+        )
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+        return
+
     msg = await update.message.reply_text("⏳ Google OAuth Sign-in link generate ho rahi hai...")
 
     if active_login_process:
@@ -371,17 +399,15 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         active_login_process = None
 
-    # Always ensure existing expired/stale tokens are cleared so agy generates a fresh consent URL
-    target_dirs = [Path.home() / ".gemini", Path("/root/.gemini")]
-    for d in target_dirs:
-        for f in ["oauth_creds.json", "google_accounts.json", "antigravity-cli/antigravity-oauth-token"]:
-            t = d / f
-            if t.exists():
-                try: t.unlink()
-                except Exception: pass
-
-    # Clear Gemini API mode in settings.json so agy runs Google OAuth flow
-    config.configure_agy_settings(use_gemini_api=False)
+    # Only clear tokens if force is explicitly requested
+    if force_reauth:
+        for d in token_dirs:
+            for f in ["oauth_creds.json", "google_accounts.json", "antigravity-cli/antigravity-oauth-token"]:
+                t = d / f
+                if t.exists():
+                    try: t.unlink()
+                    except Exception: pass
+        config.configure_agy_settings(use_gemini_api=False)
 
     agy_bin = shutil.which("agy") or "/usr/local/bin/agy"
     env = os.environ.copy()
@@ -425,7 +451,7 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         t_out = asyncio.create_task(read_stream_for_url(active_login_process.stdout))
 
         start_wait = time.time()
-        while (time.time() - start_wait) < 22.0 and not auth_url:
+        while (time.time() - start_wait) < 15.0 and not auth_url:
             done, pending = await asyncio.wait([t_err, t_out], timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
             for d in done:
                 try:
@@ -478,25 +504,16 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     disable_web_page_preview=True
                 )
         else:
-            if "Authentication required" in accumulated or "Waiting for authentication" in accumulated:
-                await msg.edit_text(
-                    f"🔐 <b>Sign-In Link Generated:</b>\n\n<pre>{html.escape(accumulated.strip()[:2000])}</pre>\n\n"
-                    "Code copy karke bhejein: <code>/code &lt;authorization_code&gt;</code>",
-                    parse_mode=ParseMode.HTML
-                )
-            elif accumulated.strip():
-                await msg.edit_text(
-                    f"ℹ️ <b>Output from agy:</b>\n\n<pre>{html.escape(accumulated.strip()[:2000])}</pre>\n\n"
-                    "👉 Naya sign-in karne ke liye: <code>/logout</code> karein, phir <code>/login</code> karein.",
-                    parse_mode=ParseMode.HTML
-                )
-            else:
-                await msg.edit_text(
-                    "ℹ️ Agy session active hai ya direct API key mode active hai.\n\n"
-                    "👉 Kisi naye Google account se switch karne ke liye:\n"
-                    "• `/logout` karein, phir `/login` karein\n"
-                    "• Ya seedha `/key <API_KEY>` se Gemini API key set karein!"
-                )
+            text = (
+                "🔐 <b>Authentication Setup (Cloud PC)</b>\n\n"
+                "Cloud PC headless remote container hai. Agar OAuth URL generate nahi ho raha to aap direct Gemini API key use kar sakte hain:\n\n"
+                "👉 <b>Sabse Aasan & Fast Tareeqa:</b>\n"
+                "1. <a href='https://aistudio.google.com/app/apikey'>Google AI Studio</a> se free API key lein.\n"
+                "2. Chat me bhej dein:\n"
+                "<code>/key &lt;AIzaSy_key1&gt; &lt;AIzaSy_key2&gt;...</code>\n\n"
+                "💡 Ek ya multiple keys add karne par bot unhe automatically rotate karke unlimited usage provide karta hai!"
+            )
+            await msg.edit_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
     except Exception as e:
         logger.exception("Error in login_command")
         await msg.edit_text(f"❌ Error: {e}")
