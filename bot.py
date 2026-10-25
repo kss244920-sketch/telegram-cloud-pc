@@ -407,26 +407,41 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         auth_url = ""
         accumulated = ""
-        start_wait = time.time()
 
-        # agy outputs the consent URL to stderr while waiting for auth on stdin
-        while (time.time() - start_wait) < 18.0 and not auth_url:
-            try:
-                line_bytes = await asyncio.wait_for(active_login_process.stderr.readline(), timeout=2.0)
-                if not line_bytes:
-                    if active_login_process.returncode is not None:
-                        break
-                    await asyncio.sleep(0.2)
-                    continue
-                line_str = line_bytes.decode("utf-8", errors="ignore").strip()
-                accumulated += line_str + "\n"
-                match = re.search(r'https://accounts\.google\.com/o/oauth2/auth[^\s"\'\<\>\)]+', line_str)
+        async def read_stream_for_url(stream):
+            text = ""
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                decoded = line.decode("utf-8", errors="ignore")
+                text += decoded
+                match = re.search(r'https://accounts\.google\.com/o/oauth2/auth[^\s"\'\<\>\)]+', text)
                 if match:
-                    auth_url = match.group(0).strip().rstrip(".,;)")
-                    break
-            except asyncio.TimeoutError:
-                if active_login_process.returncode is not None:
-                    break
+                    return match.group(0).strip().rstrip(".,;)"), text
+            return "", text
+
+        t_err = asyncio.create_task(read_stream_for_url(active_login_process.stderr))
+        t_out = asyncio.create_task(read_stream_for_url(active_login_process.stdout))
+
+        start_wait = time.time()
+        while (time.time() - start_wait) < 22.0 and not auth_url:
+            done, pending = await asyncio.wait([t_err, t_out], timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
+            for d in done:
+                try:
+                    url, acc = d.result()
+                    if acc and acc not in accumulated:
+                        accumulated += acc + "\n"
+                    if url and not auth_url:
+                        auth_url = url
+                except Exception:
+                    pass
+            if auth_url:
+                for p in pending:
+                    p.cancel()
+                break
+            if active_login_process.returncode is not None and not pending:
+                break
 
         if not auth_url and accumulated:
             match = re.search(r'https://accounts\.google\.com/o/oauth2/auth[^\s"\'\<\>\)]+', accumulated)
@@ -439,32 +454,41 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             login_markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("👉 Click Here to Sign In (Google)", url=auth_url)]
             ])
+            escaped_url = html.escape(auth_url)
             text = (
-                "🔐 **Google Authentication Required!**\n\n"
+                "🔐 <b>Google Authentication Required!</b>\n\n"
                 "1. Neeche diye button par click karein ya URL browser mein kholein.\n"
-                "2. Google account se sign-in karke **Authorization Code** copy karein.\n"
+                "2. Google account se sign-in karke <b>Authorization Code</b> copy karein.\n"
                 "3. Chat mein bhejein:\n"
-                "`/code <aapka_code>`\n\n"
-                "🔗 **Direct Full Link (Tap to Copy):**\n"
-                f"`{auth_url}`"
+                "<code>/code &lt;aapka_code&gt;</code>\n\n"
+                "🔗 <b>Direct Full Link (Tap to Copy):</b>\n"
+                f"<code>{escaped_url}</code>"
             )
-            await msg.edit_text(
-                text,
-                reply_markup=login_markup,
-                parse_mode="Markdown",
-                disable_web_page_preview=True
-            )
+            try:
+                await msg.edit_text(
+                    text,
+                    reply_markup=login_markup,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True
+                )
+            except Exception:
+                await msg.edit_text(
+                    f"🔐 Sign-In Link:\n\n{auth_url}\n\nCode copy karke bhejein: /code <authorization_code>",
+                    reply_markup=login_markup,
+                    disable_web_page_preview=True
+                )
         else:
             if "Authentication required" in accumulated or "Waiting for authentication" in accumulated:
                 await msg.edit_text(
-                    f"🔐 **Sign-In Link Generated:**\n\n```text\n{accumulated.strip()[:2000]}\n```\n\n"
-                    "Code copy karke bhejein: `/code <authorization_code>`",
-                    parse_mode="Markdown"
+                    f"🔐 <b>Sign-In Link Generated:</b>\n\n<pre>{html.escape(accumulated.strip()[:2000])}</pre>\n\n"
+                    "Code copy karke bhejein: <code>/code &lt;authorization_code&gt;</code>",
+                    parse_mode=ParseMode.HTML
                 )
             elif accumulated.strip():
                 await msg.edit_text(
-                    f"ℹ️ **Output from agy:**\n\n```text\n{accumulated.strip()[:2000]}\n```\n\n"
-                    "👉 Naya sign-in karne ke liye: `/logout` karein, phir `/login` karein."
+                    f"ℹ️ <b>Output from agy:</b>\n\n<pre>{html.escape(accumulated.strip()[:2000])}</pre>\n\n"
+                    "👉 Naya sign-in karne ke liye: <code>/logout</code> karein, phir <code>/login</code> karein.",
+                    parse_mode=ParseMode.HTML
                 )
             else:
                 await msg.edit_text(
