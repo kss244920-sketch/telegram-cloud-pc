@@ -53,6 +53,7 @@ def mask_secrets(text: str) -> str:
 
     # Regex patterns for generic API keys
     clean = re.sub(r"\bAIza[0-9A-Za-z-_]{35}\b", "********", clean)
+    clean = re.sub(r"\bAQ\.[0-9A-Za-z-_]{40,}\b", "********", clean)
 
     return clean
 

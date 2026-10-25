@@ -512,11 +512,14 @@ async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     raw_text = update.message.text.replace("/key", "", 1).strip()
-    extracted_keys = re.findall(r'AIzaSy[a-zA-Z0-9_\-]{30,}', raw_text)
+    extracted_keys = re.findall(r'(?:AIzaSy|AQ\.)[a-zA-Z0-9_\-]{20,}', raw_text)
+    if not extracted_keys:
+        tokens = re.split(r'[\s,;\n]+', raw_text)
+        extracted_keys = [t.strip() for t in tokens if len(t.strip()) >= 30]
     if not extracted_keys:
         args = context.args or []
         if args:
-            extracted_keys = [a.strip() for a in args if a.strip()]
+            extracted_keys = [a.strip() for a in args if len(a.strip()) >= 25]
 
     if not extracted_keys:
         pool_len = len(state.api_keys)
