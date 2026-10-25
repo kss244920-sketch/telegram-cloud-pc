@@ -48,7 +48,10 @@ def set_allowed_user_id(user_id: int):
     ALLOWED_USER_ID = user_id
 
 def restore_auth():
-    """Restores agy authentication bundle from environment variable if present."""
+    """Restores agy authentication bundle from environment variable if present, only when not in API key mode."""
+    # When API keys are configured, skip OAuth bundle restore so agy uses GEMINI_API_KEY directly!
+    if os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEYS"):
+        return
     raw_b64 = os.getenv("AGY_AUTH_DATA", "").strip()
     if not raw_b64:
         return

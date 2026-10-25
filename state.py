@@ -117,13 +117,29 @@ class StateManager:
                             render_service_id = render_service_id or rc.get("service_id")
                 if render_api_key and render_service_id:
                     import urllib.request
+                    url = f"https://api.render.com/v1/services/{render_service_id}/env-vars"
+                    
+                    # Read existing env vars to preserve BOT_TOKEN, GITHUB_TOKEN, etc.
+                    existing_vars = []
+                    try:
+                        get_req = urllib.request.Request(url, headers={"Authorization": f"Bearer {render_api_key}"})
+                        with urllib.request.urlopen(get_req, timeout=10) as get_resp:
+                            raw = json.loads(get_resp.read().decode())
+                            for item in raw:
+                                k = item.get("envVar", {}).get("key")
+                                v = item.get("envVar", {}).get("value")
+                                if k and k not in ["GEMINI_API_KEYS", "GEMINI_API_KEY"]:
+                                    existing_vars.append({"key": k, "value": v})
+                    except Exception:
+                        pass
+
                     val = ",".join(self.api_keys)
                     active = self.get_active_api_key()
-                    url = f"https://api.render.com/v1/services/{render_service_id}/env-vars"
-                    payload = json.dumps([
+                    payload_list = existing_vars + [
                         {"key": "GEMINI_API_KEYS", "value": val},
                         {"key": "GEMINI_API_KEY", "value": active}
-                    ]).encode("utf-8")
+                    ]
+                    payload = json.dumps(payload_list).encode("utf-8")
                     req = urllib.request.Request(
                         url,
                         data=payload,
@@ -131,7 +147,7 @@ class StateManager:
                         method="PUT"
                     )
                     with urllib.request.urlopen(req, timeout=10) as resp:
-                        logger.info(f"Successfully synced {len(self.api_keys)} API keys to Render env vars!")
+                        logger.info(f"Successfully synced {len(self.api_keys)} API keys to Render env vars without overwriting others!")
             except Exception as e:
                 logger.warning(f"Failed to sync API keys to Render: {e}")
 

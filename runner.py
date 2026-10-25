@@ -462,6 +462,18 @@ class AgyRunner:
         active_key = state.get_active_api_key()
         if active_key:
             env["GEMINI_API_KEY"] = active_key
+            # When API key is active, remove leftover OAuth tokens so agy directly connects via GEMINI_API_KEY!
+            for p in [
+                Path.home() / ".gemini/antigravity-cli/antigravity-oauth-token",
+                Path("/root/.gemini/antigravity-cli/antigravity-oauth-token"),
+                Path.home() / ".gemini/oauth_creds.json",
+                Path("/root/.gemini/oauth_creds.json")
+            ]:
+                try:
+                    if p.exists():
+                        p.unlink()
+                except Exception:
+                    pass
         env["PAGER"] = "cat"
         env["TERM"] = "xterm-256color"
 
@@ -591,6 +603,18 @@ class AgyRunner:
         active_key = state.get_active_api_key()
         if active_key:
             env["GEMINI_API_KEY"] = active_key
+            # When API key is active, remove leftover OAuth tokens so agy directly connects via GEMINI_API_KEY!
+            for p in [
+                Path.home() / ".gemini/antigravity-cli/antigravity-oauth-token",
+                Path("/root/.gemini/antigravity-cli/antigravity-oauth-token"),
+                Path.home() / ".gemini/oauth_creds.json",
+                Path("/root/.gemini/oauth_creds.json")
+            ]:
+                try:
+                    if p.exists():
+                        p.unlink()
+                except Exception:
+                    pass
         env["PAGER"] = "cat"
 
         cmd = [
