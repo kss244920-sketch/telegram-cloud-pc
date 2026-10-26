@@ -116,50 +116,68 @@ class StateManager:
                             rc = json.load(f)
                             render_api_key = render_api_key or rc.get("api_key")
                             render_service_id = render_service_id or rc.get("service_id")
-                if render_api_key and render_service_id:
-                    import urllib.request
-                    url = f"https://api.render.com/v1/services/{render_service_id}/env-vars"
-                    
-                    # Read existing env vars to preserve BOT_TOKEN, GITHUB_TOKEN, etc.
-                    existing_vars = []
-                    current_remote_keys = ""
-                    try:
-                        get_req = urllib.request.Request(url, headers={"Authorization": f"Bearer {render_api_key}"})
-                        with urllib.request.urlopen(get_req, timeout=10) as get_resp:
-                            raw = json.loads(get_resp.read().decode())
-                            for item in raw:
-                                k = item.get("envVar", {}).get("key")
-                                v = item.get("envVar", {}).get("value")
-                                if k == "GEMINI_API_KEYS":
-                                    current_remote_keys = v or ""
-                                if k and k not in ["GEMINI_API_KEYS", "GEMINI_API_KEY"]:
-                                    existing_vars.append({"key": k, "value": v})
-                    except Exception:
-                        pass
+                if not (render_api_key and render_service_id):
+                    return
 
-                    val = ",".join(self.api_keys) if self.api_keys else ""
-                    # If remote keys already match, skip PUT to prevent triggering a redundant container redeploy
-                    if val == current_remote_keys:
-                        logger.debug("Render env keys already identical; skipping redeploy trigger.")
-                        return
+                import urllib.request
+                headers = {
+                    "Authorization": f"Bearer {render_api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                }
 
-                    if self.api_keys:
-                        active = self.get_active_api_key()
-                        payload_list = existing_vars + [
-                            {"key": "GEMINI_API_KEYS", "value": val},
-                            {"key": "GEMINI_API_KEY", "value": active}
-                        ]
-                    else:
-                        payload_list = existing_vars
-                    payload = json.dumps(payload_list).encode("utf-8")
-                    req = urllib.request.Request(
-                        url,
-                        data=payload,
-                        headers={"Authorization": f"Bearer {render_api_key}", "Content-Type": "application/json"},
+                # Check existing remote values to avoid redundant updates
+                current_remote_keys = ""
+                try:
+                    get_req = urllib.request.Request(
+                        f"https://api.render.com/v1/services/{render_service_id}/env-vars/GEMINI_API_KEYS",
+                        headers={"Authorization": f"Bearer {render_api_key}", "Accept": "application/json"}
+                    )
+                    with urllib.request.urlopen(get_req, timeout=10) as get_resp:
+                        raw = json.loads(get_resp.read().decode())
+                        current_remote_keys = raw.get("value", "")
+                except Exception:
+                    pass
+
+                val = ",".join(self.api_keys) if self.api_keys else ""
+                if val == current_remote_keys:
+                    logger.debug("Render env keys already identical; skipping redeploy trigger.")
+                    return
+
+                if self.api_keys:
+                    active = self.get_active_api_key()
+                    # Update GEMINI_API_KEYS
+                    req_keys = urllib.request.Request(
+                        f"https://api.render.com/v1/services/{render_service_id}/env-vars/GEMINI_API_KEYS",
+                        data=json.dumps({"value": val}).encode("utf-8"),
+                        headers=headers,
                         method="PUT"
                     )
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        logger.info(f"Successfully synced API keys to Render env vars without overwriting others!")
+                    with urllib.request.urlopen(req_keys, timeout=10) as resp:
+                        logger.info("Successfully updated GEMINI_API_KEYS on Render.")
+
+                    # Update GEMINI_API_KEY
+                    req_key = urllib.request.Request(
+                        f"https://api.render.com/v1/services/{render_service_id}/env-vars/GEMINI_API_KEY",
+                        data=json.dumps({"value": active}).encode("utf-8"),
+                        headers=headers,
+                        method="PUT"
+                    )
+                    with urllib.request.urlopen(req_key, timeout=10) as resp:
+                        logger.info("Successfully updated GEMINI_API_KEY on Render.")
+                else:
+                    # Clear keys on Render if pool is empty
+                    for k in ["GEMINI_API_KEY", "GEMINI_API_KEYS"]:
+                        try:
+                            del_req = urllib.request.Request(
+                                f"https://api.render.com/v1/services/{render_service_id}/env-vars/{k}",
+                                headers={"Authorization": f"Bearer {render_api_key}"},
+                                method="DELETE"
+                            )
+                            with urllib.request.urlopen(del_req, timeout=10) as resp:
+                                logger.info(f"Deleted {k} from Render.")
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.warning(f"Failed to sync API keys to Render: {e}")
 

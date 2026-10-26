@@ -146,8 +146,8 @@ async def check_agy_endpoint():
             files[p] = os.listdir(p)
     
     try:
-        proc = subprocess.run([agy_bin, "-p", "hi", "--output-format", "stream-json", "--dangerously-skip-permissions"],
-                              capture_output=True, text=True, timeout=5, env=env)
+        proc = subprocess.run([agy_bin, "--model", config.DEFAULT_AGY_MODEL, "-p", "hi", "--output-format", "stream-json", "--dangerously-skip-permissions"],
+                              capture_output=True, text=True, timeout=10, env=env)
         return {
             "returncode": proc.returncode,
             "stdout": proc.stdout[:1000],

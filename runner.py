@@ -657,6 +657,7 @@ class AgyRunner:
 
         cmd = [
             agy_bin,
+            "--model", config.DEFAULT_AGY_MODEL,
             "-p", prompt,
             "--dangerously-skip-permissions",
             "--output-format", "stream-json"

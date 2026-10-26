@@ -24,6 +24,7 @@ PORT = int(os.getenv("PORT", "8000"))
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "")
+DEFAULT_AGY_MODEL = os.getenv("DEFAULT_AGY_MODEL", "Gemini 3.8 Flash (Low)")
 
 def get_initial_api_keys() -> list[str]:
     """Extract initial list of API keys from env vars."""
@@ -72,8 +73,10 @@ def configure_agy_settings(use_gemini_api: bool = False):
                     data = {}
             if use_gemini_api:
                 data["modelProvider"] = "gemini"
+                data["model"] = DEFAULT_AGY_MODEL
             else:
                 data.pop("modelProvider", None)
+                data.pop("model", None)
 
             with open(settings_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)

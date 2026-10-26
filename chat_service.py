@@ -138,6 +138,7 @@ class ChatService:
 
         cmd = [
             agy_bin,
+            "--model", config.DEFAULT_AGY_MODEL,
             "-p", prompt,
             "--dangerously-skip-permissions"
         ]

@@ -39,6 +39,13 @@ def mask_secrets(text: str) -> str:
         config.GITHUB_TOKEN,
         config.GEMINI_API_KEY,
     ]
+    try:
+        from state import state
+        for k in state.api_keys:
+            if k and k not in sensitive_values:
+                sensitive_values.append(k)
+    except Exception:
+        pass
 
     clean = text
     for val in sensitive_values:

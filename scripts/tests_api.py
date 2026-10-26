@@ -62,6 +62,13 @@ async def run_tests():
     assert "Invalid" in reason, f"Unexpected reason for fake key: {reason}"
     print(f"  ✅ Validation correctly identified invalid key: {reason}")
 
+    # Test live key if passed via environment
+    env_live_key = os.getenv("GEMINI_API_KEY", "")
+    if env_live_key:
+        is_valid_live, reason_live = await validate_gemini_key(env_live_key)
+        assert is_valid_live, f"Environment Gemini key should be valid! Reason: {reason_live}"
+        print(f"  ✅ Live environment key validated successfully: {reason_live}")
+
     # 3. State Key Pool & Rotation Tests
     print("\n[TEST 3] State Key Pool & Rotation...")
     keys = ["AIzaSyKey1_Dummy", "AIzaSyKey2_Dummy", "AIzaSyKey3_Dummy"]
@@ -91,13 +98,15 @@ async def run_tests():
     with open(settings_p) as f:
         data = json.load(f)
     assert data.get("modelProvider") == "gemini", "modelProvider was not set to gemini!"
-    print("  ✅ configure_agy_settings(use_gemini_api=True) correctly set modelProvider: gemini")
+    assert data.get("model") == config.DEFAULT_AGY_MODEL, f"model was not set to {config.DEFAULT_AGY_MODEL}!"
+    print(f"  ✅ configure_agy_settings(use_gemini_api=True) correctly set modelProvider: gemini & model: {config.DEFAULT_AGY_MODEL}")
 
     config.configure_agy_settings(use_gemini_api=False)
     with open(settings_p) as f:
         data = json.load(f)
     assert "modelProvider" not in data, "modelProvider was not removed on False!"
-    print("  ✅ configure_agy_settings(use_gemini_api=False) cleanly removed modelProvider for OAuth mode")
+    assert "model" not in data, "model was not removed on False!"
+    print("  ✅ configure_agy_settings(use_gemini_api=False) cleanly removed modelProvider and model for OAuth mode")
 
     # Clean up test keys
     state.clear_api_keys(sync_render=False)
