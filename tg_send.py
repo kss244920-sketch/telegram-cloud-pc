@@ -14,7 +14,23 @@ def main():
     file_arg = sys.argv[1].strip()
     caption = sys.argv[2].strip() if len(sys.argv) > 2 else ""
 
-    bot_token = os.getenv("BOT_TOKEN", "8798239169:AAFbzjM4n7wYzwVNrLbiw-cw0irXIGLI8yI")
+    bot_token = os.getenv("BOT_TOKEN", "").strip()
+    if not bot_token:
+        # Fallback to local .env if available
+        env_file = Path("/app/.env")
+        if not env_file.exists():
+            env_file = Path(__file__).resolve().parent / ".env"
+        if env_file.exists():
+            try:
+                for line in env_file.read_text().splitlines():
+                    if line.startswith("BOT_TOKEN="):
+                        bot_token = line.split("=", 1)[1].strip().strip('"\'')
+            except Exception:
+                pass
+
+    if not bot_token:
+        print("Error: BOT_TOKEN is not configured.")
+        sys.exit(1)
     
     # Locate chat_id from state.json or env
     chat_id = os.getenv("ALLOWED_USER_ID")

@@ -1,4 +1,5 @@
 import asyncio
+import html
 import json
 import logging
 import os
@@ -7,6 +8,7 @@ import shutil
 import time
 from pathlib import Path
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
 import config
@@ -42,7 +44,7 @@ def format_terminal_box(
     status_text: str,
     max_lines: int = 18
 ) -> str:
-    """Builds a formatted terminal box suitable for Telegram code block."""
+    """Builds a formatted terminal box suitable for Telegram HTML pre/code block."""
     header = f"┌── 💻 Terminal [{dir_name}] "
     header += "─" * max(1, 38 - len(header)) + "┐"
 
@@ -61,7 +63,8 @@ def format_terminal_box(
     footer = f"└── [{status_text}] "
     footer += "─" * max(1, 38 - len(footer)) + "┘"
 
-    return f"```text\n{header}\n{screen_content}\n{footer}\n```"
+    raw_box = f"{header}\n{screen_content}\n{footer}"
+    return f"<pre><code class=\"language-text\">{html.escape(raw_box)}</code></pre>"
 
 class AgyRunner:
     def __init__(self):
@@ -280,7 +283,7 @@ class AgyRunner:
                 chat_id=chat_id,
                 message_id=live_message_id,
                 text=mask_secrets(box),
-                parse_mode="Markdown"
+                parse_mode=ParseMode.HTML
             )
         except Exception:
             pass
@@ -339,7 +342,7 @@ class AgyRunner:
                     chat_id=chat_id,
                     message_id=live_message_id,
                     text=mask_secrets(box),
-                    parse_mode="Markdown"
+                    parse_mode=ParseMode.HTML
                 )
                 return {"status": "success", "time": elapsed, "response": ""}
             except Exception as e:
@@ -354,7 +357,7 @@ class AgyRunner:
                         chat_id=chat_id,
                         message_id=live_message_id,
                         text=mask_secrets(err_box),
-                        parse_mode="Markdown"
+                        parse_mode=ParseMode.HTML
                     )
                 except Exception:
                     pass
@@ -371,7 +374,7 @@ class AgyRunner:
                     chat_id=chat_id,
                     message_id=live_message_id,
                     text=mask_secrets(box),
-                    parse_mode="Markdown"
+                    parse_mode=ParseMode.HTML
                 )
             except Exception:
                 pass
@@ -431,7 +434,7 @@ class AgyRunner:
                     chat_id=chat_id,
                     message_id=live_message_id,
                     text=masked,
-                    parse_mode="Markdown",
+                    parse_mode=ParseMode.HTML,
                     reply_markup=markup
                 )
             except TelegramError as e:
@@ -475,6 +478,7 @@ class AgyRunner:
             self.current_process = await asyncio.create_subprocess_shell(
                 cmd_to_run,
                 cwd=str(cwd),
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=env
@@ -483,9 +487,23 @@ class AgyRunner:
             # Initial render
             await update_msg(final=False)
 
-            # Read stdout line by line in real-time
+            # Read stdout line by line in real-time with watchdog timeout
+            timeout_limit = 120.0
             while True:
-                line_bytes = await self.current_process.stdout.readline()
+                try:
+                    line_bytes = await asyncio.wait_for(
+                        self.current_process.stdout.readline(),
+                        timeout=timeout_limit
+                    )
+                except asyncio.TimeoutError:
+                    if self.current_process and self.current_process.returncode is None:
+                        try:
+                            self.current_process.terminate()
+                        except Exception:
+                            pass
+                    output_lines.append(f"⏱️ Command timed out after {int(timeout_limit)}s")
+                    break
+
                 if not line_bytes:
                     break
 
@@ -496,8 +514,15 @@ class AgyRunner:
                 output_lines.append(clean)
                 await update_msg(final=False)
 
-            await self.current_process.wait()
-            ret_code = self.current_process.returncode or 0
+            try:
+                await asyncio.wait_for(self.current_process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                try:
+                    self.current_process.kill()
+                except Exception:
+                    pass
+
+            ret_code = self.current_process.returncode if self.current_process.returncode is not None else 0
             await update_msg(final=True, return_code=ret_code)
 
             elapsed_sec = int(time.time() - start_time)
@@ -565,7 +590,8 @@ class AgyRunner:
 
             events_to_show = display_lines[-15:]
             body = "\n".join(events_to_show)
-            terminal_block = f"```text\n{header}\n{body}\n{footer}\n```"
+            raw_block = f"{header}\n{body}\n{footer}"
+            terminal_block = f"<pre><code class=\"language-text\">{html.escape(raw_block)}</code></pre>"
             masked = mask_secrets(terminal_block)
 
             try:
@@ -573,7 +599,7 @@ class AgyRunner:
                     chat_id=chat_id,
                     message_id=live_message_id,
                     text=masked,
-                    parse_mode="Markdown",
+                    parse_mode=ParseMode.HTML,
                     reply_markup=markup
                 )
             except TelegramError as e:
@@ -618,6 +644,7 @@ class AgyRunner:
         self.current_process = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(project_dir),
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env
@@ -679,7 +706,20 @@ class AgyRunner:
                 }
 
         while True:
-            line_bytes = await self.current_process.stdout.readline()
+            try:
+                line_bytes = await asyncio.wait_for(
+                    self.current_process.stdout.readline(),
+                    timeout=180.0
+                )
+            except asyncio.TimeoutError:
+                if self.current_process and self.current_process.returncode is None:
+                    try:
+                        self.current_process.terminate()
+                    except Exception:
+                        pass
+                display_lines.append("⏱️ Task timed out (180s inactivity).")
+                break
+
             if not line_bytes:
                 break
 

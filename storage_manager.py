@@ -17,21 +17,34 @@ class StorageManager:
 
     def load_manifest(self) -> list[dict]:
         """Loads metadata manifest of files saved to the Telegram Storage Channel."""
-        if not MANIFEST_FILE.exists():
-            return []
-        try:
-            with open(MANIFEST_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Failed to load manifest: {e}")
-            return []
+        candidates = [
+            MANIFEST_FILE,
+            config.WORKSPACE_DIR / "default" / ".storage_manifest.json",
+            config.BASE_DIR / ".storage_manifest.json"
+        ]
+        for p in candidates:
+            if p.exists():
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        if data:
+                            return data
+                except Exception as e:
+                    logger.debug(f"Could not load manifest from {p}: {e}")
+        return []
 
     def save_manifest(self, manifest: list[dict]):
-        try:
-            with open(MANIFEST_FILE, "w", encoding="utf-8") as f:
-                json.dump(manifest, f, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to save manifest: {e}")
+        candidates = [
+            MANIFEST_FILE,
+            config.WORKSPACE_DIR / "default" / ".storage_manifest.json"
+        ]
+        for p in candidates:
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump(manifest, f, indent=2)
+            except Exception as e:
+                logger.error(f"Failed to save manifest to {p}: {e}")
 
     def update_storage_doc(self, project_dir: Path, manifest: list[dict]):
         """Creates/updates TELEGRAM_STORAGE.md in workspace root for agy and shell access."""

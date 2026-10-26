@@ -121,6 +121,7 @@ class StateManager:
                     
                     # Read existing env vars to preserve BOT_TOKEN, GITHUB_TOKEN, etc.
                     existing_vars = []
+                    current_remote_keys = ""
                     try:
                         get_req = urllib.request.Request(url, headers={"Authorization": f"Bearer {render_api_key}"})
                         with urllib.request.urlopen(get_req, timeout=10) as get_resp:
@@ -128,13 +129,20 @@ class StateManager:
                             for item in raw:
                                 k = item.get("envVar", {}).get("key")
                                 v = item.get("envVar", {}).get("value")
+                                if k == "GEMINI_API_KEYS":
+                                    current_remote_keys = v or ""
                                 if k and k not in ["GEMINI_API_KEYS", "GEMINI_API_KEY"]:
                                     existing_vars.append({"key": k, "value": v})
                     except Exception:
                         pass
 
+                    val = ",".join(self.api_keys) if self.api_keys else ""
+                    # If remote keys already match, skip PUT to prevent triggering a redundant container redeploy
+                    if val == current_remote_keys:
+                        logger.debug("Render env keys already identical; skipping redeploy trigger.")
+                        return
+
                     if self.api_keys:
-                        val = ",".join(self.api_keys)
                         active = self.get_active_api_key()
                         payload_list = existing_vars + [
                             {"key": "GEMINI_API_KEYS", "value": val},
@@ -218,20 +226,25 @@ class StateManager:
     def change_directory(self, target_str: str) -> tuple[bool, str]:
         target_str = target_str.strip()
         curr = self.get_current_cwd()
+        ws_root = config.WORKSPACE_DIR.resolve()
+
         if not target_str or target_str == "~":
             new_path = self.get_project_dir()
         elif target_str == "..":
-            # Don't go outside WORKSPACE_DIR if possible, or allow going up
-            if curr != config.WORKSPACE_DIR:
+            if curr.resolve() != ws_root and ws_root in curr.resolve().parents:
                 new_path = curr.parent
             else:
                 new_path = curr
         else:
             p = Path(target_str)
             if p.is_absolute():
-                new_path = p
+                new_path = p.resolve()
             else:
                 new_path = (curr / p).resolve()
+
+        # Enforce containment: Cannot cd outside workspace root
+        if new_path != ws_root and ws_root not in new_path.parents:
+            return False, "Access restricted: Directory cannot escape workspace root."
 
         if new_path.exists() and new_path.is_dir():
             self.set_current_cwd(new_path)

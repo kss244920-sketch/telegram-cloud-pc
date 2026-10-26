@@ -105,7 +105,7 @@ def render_buffer_text_and_markup() -> tuple[str | None, InlineKeyboardMarkup | 
             escaped_text = html.escape(item['text'][:80])
             lines.append(f"{i}. \"{escaped_text}\"")
 
-    lines.append("\n<i>Aur messages/files bhejein, ya neeche Proceed karein:</i>")
+    lines.append("\n<i>👉 Prompt likhein (e.g. \"is file ko dekho\") ya run karne ke liye <b>[▶️ PROCEED]</b> dabayein:</i>")
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("▶️ PROCEED", callback_data="run_proceed")]
     ])
@@ -727,37 +727,56 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    state.add_to_buffer(text, item_type="text")
-    buf_text, markup = render_buffer_text_and_markup()
+    # Check if we have buffered items (like pending file uploads)
+    if state.prompt_buffer:
+        state.add_to_buffer(text, item_type="text")
+        combined_prompt = "\n".join(x["text"] for x in state.prompt_buffer)
+        state.clear_buffer()
+        prompt_to_run = combined_prompt
+        # Clean up previous buffer message if present
+        if state.buffer_message_id:
+            try:
+                await context.bot.delete_message(
+                    chat_id=update.effective_chat.id,
+                    message_id=state.buffer_message_id
+                )
+            except Exception:
+                pass
+            state.buffer_message_id = None
+    else:
+        prompt_to_run = text
 
-    sent = False
-    if state.buffer_message_id:
-        try:
-            await context.bot.edit_message_text(
-                chat_id=update.effective_chat.id,
-                message_id=state.buffer_message_id,
-                text=buf_text,
-                reply_markup=markup,
-                parse_mode=ParseMode.HTML
-            )
-            sent = True
-        except Exception:
-            pass
+    conv_id = state.active_conversation_id
+    cwd = state.get_current_cwd()
+    dir_name = cwd.name or "workspace"
 
-    if not sent:
-        msg = await context.bot.send_message(
+    clean_preview = prompt_to_run.split('\n')[0][:35]
+    header = f"┌── 💻 Terminal [{dir_name}] "
+    header += "─" * max(1, 38 - len(header)) + "┐"
+    footer = "└── [⏳ Starting...] " + "─" * 16 + "┘"
+    raw_box = f"{header}\n🚀 Task: {clean_preview}\n{footer}"
+    initial_box = f"<pre><code class=\"language-text\">{html.escape(raw_box)}</code></pre>"
+
+    cancel_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛑 Cancel", callback_data="stop_current_task")]
+    ])
+
+    live_msg = await update.message.reply_text(
+        initial_box,
+        reply_markup=cancel_markup,
+        parse_mode=ParseMode.HTML
+    )
+
+    asyncio.create_task(
+        execute_terminal_task(
+            prompt=prompt_to_run,
+            bot=context.bot,
             chat_id=update.effective_chat.id,
-            text=buf_text,
-            reply_markup=markup,
-            parse_mode=ParseMode.HTML
+            live_message_id=live_msg.message_id,
+            conversation_id=conv_id,
+            project_dir=cwd
         )
-        state.buffer_message_id = msg.message_id
-
-    # Auto-delete user message to keep chat tidy
-    try:
-        await update.message.delete()
-    except Exception:
-        pass
+    )
 
 async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
@@ -821,8 +840,45 @@ async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT
     if saved_info.get("is_zip") and saved_info.get("unzip_info"):
         extra_note = f" ({saved_info['unzip_info']} at inbox/extracted_{saved_path.stem})"
 
+    # If the user provided a caption with the file, execute immediately!
+    if caption:
+        prompt_to_run = f"File inbox/{saved_info['name']} (caption: {caption})" + extra_note
+        conv_id = state.active_conversation_id
+        cwd = state.get_current_cwd()
+        dir_name = cwd.name or "workspace"
+
+        clean_preview = f"Upload: {saved_info['name']} ({caption[:20]})"
+        header = f"┌── 💻 Terminal [{dir_name}] "
+        header += "─" * max(1, 38 - len(header)) + "┐"
+        footer = "└── [⏳ Starting...] " + "─" * 16 + "┘"
+        raw_box = f"{header}\n🚀 Task: {clean_preview}\n{footer}"
+        initial_box = f"<pre><code class=\"language-text\">{html.escape(raw_box)}</code></pre>"
+
+        cancel_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛑 Cancel", callback_data="stop_current_task")]
+        ])
+
+        live_msg = await update.message.reply_text(
+            initial_box,
+            reply_markup=cancel_markup,
+            parse_mode=ParseMode.HTML
+        )
+
+        asyncio.create_task(
+            execute_terminal_task(
+                prompt=prompt_to_run,
+                bot=context.bot,
+                chat_id=update.effective_chat.id,
+                live_message_id=live_msg.message_id,
+                conversation_id=conv_id,
+                project_dir=cwd
+            )
+        )
+        return
+
+    # No caption provided: add to prompt buffer and wait for user's prompt or Proceed button
     state.add_to_buffer(
-        text=f"File inbox/{saved_info['name']}" + (f" (caption: {caption})" if caption else "") + extra_note,
+        text=f"File inbox/{saved_info['name']}" + extra_note,
         item_type="file",
         file_name=saved_info["name"],
         size_kb=saved_info["size_kb"]
@@ -852,12 +908,6 @@ async def handle_document_or_photo(update: Update, context: ContextTypes.DEFAULT
             parse_mode=ParseMode.HTML
         )
         state.buffer_message_id = msg.message_id
-
-    # Auto-delete user message to keep chat tidy
-    try:
-        await update.message.delete()
-    except Exception:
-        pass
 
 # ----------------- Execution Pipeline -----------------
 
@@ -928,7 +978,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         header = f"┌── 💻 Terminal [{dir_name}] "
         header += "─" * max(1, 38 - len(header)) + "┐"
         footer = "└── [⏳ Starting...] " + "─" * 16 + "┘"
-        initial_box = f"```text\n{header}\n🚀 Task: {clean_preview}\n{footer}\n```"
+        raw_box = f"{header}\n🚀 Task: {clean_preview}\n{footer}"
+        initial_box = f"<pre><code class=\"language-text\">{html.escape(raw_box)}</code></pre>"
 
         cancel_markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("🛑 Cancel", callback_data="stop_current_task")]
@@ -938,7 +989,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text(
                 initial_box,
                 reply_markup=cancel_markup,
-                parse_mode="Markdown"
+                parse_mode=ParseMode.HTML
             )
         except Exception:
             pass
