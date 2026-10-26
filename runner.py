@@ -37,6 +37,31 @@ def is_quota_error(text: str) -> bool:
     ]
     return any(p in t for p in patterns)
 
+def is_api_key_invalid_error(text: str) -> bool:
+    """Detects invalid, expired, or malformed API key across CLI outputs."""
+    if not text:
+        return False
+    t = text.lower()
+    patterns = [
+        "api_key_invalid", "api key not valid", "invalid api key",
+        "api_key_expired", "invalid_argument", "please pass a valid api key",
+        "api key is expired", "api key has been deleted", "key_expired",
+        "unauthenticated", "error 400"
+    ]
+    return any(p in t for p in patterns)
+
+def is_auth_required_error(text: str) -> bool:
+    """Detects Google account / OAuth login requirements."""
+    if not text:
+        return False
+    t = text.lower()
+    patterns = [
+        "authentication required", "accounts.google.com/o/oauth2",
+        "you are not logged into antigravity", "not authenticated, trying silent auth",
+        "please log in to antigravity", "auth required"
+    ]
+    return any(p in t for p in patterns)
+
 def format_terminal_box(
     dir_name: str,
     prompt_line: str,
@@ -653,13 +678,20 @@ class AgyRunner:
         final_response = ""
         agent_deltas = []
 
-        async def handle_quota_rotation(reason_str: str) -> dict | None:
+        async def handle_api_rotation(reason_type: str, reason_detail: str) -> dict | None:
             pool_len = len(state.api_keys)
             if pool_len > 1 and attempt < pool_len:
                 prev_idx = state.active_key_index
                 next_k = state.rotate_api_key()
                 curr_idx = state.active_key_index
-                display_lines.append(f"🔄 Quota reached on Key #{prev_idx + 1}!")
+
+                if reason_type == "quota":
+                    display_lines.append(f"🔄 Quota reached on Key #{prev_idx + 1}!")
+                elif reason_type == "invalid_key":
+                    display_lines.append(f"⚠️ Key #{prev_idx + 1} invalid/expired!")
+                else:
+                    display_lines.append(f"🔐 Auth error on Key #{prev_idx + 1}!")
+
                 display_lines.append(f"⚡ Auto-switched to Key #{curr_idx + 1}/{pool_len}")
                 display_lines.append("🚀 Retrying prompt automatically...")
                 await update_msg(final=False)
@@ -674,10 +706,13 @@ class AgyRunner:
                     start_time=start_time,
                     attempt=attempt + 1
                 )
-            elif pool_len > 0 and attempt >= pool_len:
-                display_lines.append(f"❌ Sabhi {pool_len} accounts ka Quota exceed ho gaya!")
-                await update_msg(final=True, status_override="❌ All Keys Quota Exceeded")
-                self.stop_current_task()
+
+            # Pool exhausted or single key
+            self.stop_current_task()
+            if reason_type == "quota":
+                status_text = f"❌ Sabhi {pool_len} accounts ka Quota exceed!" if pool_len > 1 else "❌ Quota Limit Exceeded!"
+                display_lines.append(status_text)
+                await update_msg(final=True, status_override="❌ Quota Limit Exceeded")
                 return {
                     "status": "quota_exhausted",
                     "time": "0s",
@@ -689,19 +724,32 @@ class AgyRunner:
                         "Ya Google quota reset (kal) hone ka wait karein."
                     )
                 }
-            else:
-                display_lines.append("❌ Quota Limit Exceeded!")
-                await update_msg(final=True, status_override="❌ Quota Limit Exceeded")
-                self.stop_current_task()
+            elif reason_type == "invalid_key":
+                display_lines.append("❌ Invalid API Key detected!")
+                await update_msg(final=True, status_override="❌ Invalid API Key")
                 return {
-                    "status": "quota_exhausted",
+                    "status": "invalid_api_key",
                     "time": "0s",
                     "response": (
-                        "⚠️ **Account ka Quota Limit Exceeded ho gaya!**\n\n"
-                        "Pool mein koi doosra backup account set nahi hai.\n\n"
-                        "👉 **Solution:** Apne 4-5 Gmail accounts ki Gemini API keys chat mein add karein:\n"
-                        "`/key <AIzaSy_1> <AIzaSy_2> <AIzaSy_3>...`\n\n"
-                        "Bot unhe automatically pool me save karke instant failover rotation start kar dega! 🚀"
+                        "❌ **Gemini API Key Invalid ya Revoked hai!**\n\n"
+                        "Google AI Studio se active API key lekar update karein:\n"
+                        "👉 https://aistudio.google.com/app/apikey\n\n"
+                        "Chat me add karein:\n"
+                        "`/key <AIzaSy_key>`"
+                    )
+                }
+            else:
+                display_lines.append("🔐 Auth required: /login ya /key karein.")
+                await update_msg(final=True, status_override="🔐 Auth Required")
+                return {
+                    "status": "auth_required",
+                    "time": "0s",
+                    "response": (
+                        "🔐 **Authentication Zaroori Hai!**\n\n"
+                        "1. **Gemini API Key (Recommended - Unlimited & Fast):**\n"
+                        "   `/key <AIzaSy_key>`\n\n"
+                        "2. **Google OAuth Sign-in:**\n"
+                        "   `/login`"
                     )
                 }
 
@@ -727,9 +775,28 @@ class AgyRunner:
             if not line_str:
                 continue
 
+            # Detect AGY_ERROR JSON on stderr/stdout
+            if "AGY_ERROR:" in line_str:
+                try:
+                    raw_err = line_str.split("AGY_ERROR:", 1)[1].strip()
+                    err_json = json.loads(raw_err)
+                    c_status = err_json.get("status", "")
+                    c_code = err_json.get("error_code", 0)
+                    c_short = err_json.get("short_error", "")
+                    if c_code == 429 or c_status == "RESOURCE_EXHAUSTED" or is_quota_error(c_short):
+                        return await handle_api_rotation("quota", c_short)
+                    if c_code in [400, 401, 403] or c_status in ["INVALID_ARGUMENT", "UNAUTHENTICATED", "PERMISSION_DENIED"] or is_api_key_invalid_error(c_short):
+                        return await handle_api_rotation("invalid_key", c_short)
+                except Exception:
+                    pass
+
             # Early Quota detection on raw stream line
             if is_quota_error(line_str):
-                ret = await handle_quota_rotation(line_str)
+                ret = await handle_api_rotation("quota", line_str)
+                if ret:
+                    return ret
+            if is_api_key_invalid_error(line_str):
+                ret = await handle_api_rotation("invalid_key", line_str)
                 if ret:
                     return ret
 
@@ -750,10 +817,14 @@ class AgyRunner:
                     su = event.get("step_update", {})
                     stype = su.get("step_type")
 
-                    if is_quota_error(su.get("error", "")):
-                        ret = await handle_quota_rotation(su.get("error", ""))
-                        if ret:
-                            return ret
+                    step_err = su.get("error", "")
+                    if step_err:
+                        if is_quota_error(step_err):
+                            return await handle_api_rotation("quota", step_err)
+                        if is_api_key_invalid_error(step_err):
+                            return await handle_api_rotation("invalid_key", step_err)
+                        if is_auth_required_error(step_err):
+                            return await handle_api_rotation("auth", step_err)
 
                     if stype == "agent_response":
                         dur = su.get("duration_seconds", 0)
@@ -797,45 +868,30 @@ class AgyRunner:
                     final_response = res.get("response", "")
                     if res.get("usage"):
                         last_known_tokens = res.get("usage")
-                    if res.get("status") in ["ERROR", "FAILED"] or is_quota_error(res.get("error", "")) or is_quota_error(final_response):
-                        ret = await handle_quota_rotation(res.get("error", "") or final_response or "Result Error")
-                        if ret:
-                            return ret
+                    res_err = res.get("error", "")
+                    check_text = f"{res_err} {final_response}".strip()
+                    if is_quota_error(check_text):
+                        return await handle_api_rotation("quota", check_text)
+                    if is_api_key_invalid_error(check_text):
+                        return await handle_api_rotation("invalid_key", check_text)
+                    if is_auth_required_error(check_text):
+                        return await handle_api_rotation("auth", check_text)
 
             except json.JSONDecodeError:
                 if len(line_str) > 0 and not line_str.startswith("{"):
                     if is_quota_error(line_str):
-                        ret = await handle_quota_rotation(line_str)
+                        ret = await handle_api_rotation("quota", line_str)
+                        if ret:
+                            return ret
+                    if is_api_key_invalid_error(line_str):
+                        ret = await handle_api_rotation("invalid_key", line_str)
+                        if ret:
+                            return ret
+                    if is_auth_required_error(line_str):
+                        ret = await handle_api_rotation("auth", line_str)
                         if ret:
                             return ret
 
-                    if "Authentication required" in line_str or "accounts.google.com/o/oauth2" in line_str:
-                        # If we have an API key pool, try using the first/next key before failing!
-                        if state.api_keys and attempt <= len(state.api_keys):
-                            next_k = state.rotate_api_key() if len(state.api_keys) > 1 else state.get_active_api_key()
-                            if next_k:
-                                display_lines.append(f"🔄 Using API Key #{state.active_key_index + 1}...")
-                                await update_msg(final=False)
-                                self.stop_current_task()
-                                return await self._run_agy_stream(
-                                    prompt=prompt,
-                                    project_dir=project_dir,
-                                    bot=bot,
-                                    chat_id=chat_id,
-                                    live_message_id=live_message_id,
-                                    conversation_id=conversation_id,
-                                    start_time=start_time,
-                                    attempt=attempt + 1
-                                )
-
-                        display_lines.append("🔐 Auth required: /login ya /key karein.")
-                        await update_msg(final=True, status_override="🔐 Auth Required")
-                        self.stop_current_task()
-                        return {
-                            "status": "auth_required",
-                            "time": "0s",
-                            "response": "🔐 **Google Authentication Required!**\n\n1. Chat me `/login` likhein aur sign-in karein.\n2. Phir `/code <authorization_code>` bhejein.\n\n_Ya Gemini API Key set karein:_ `/key <AIzaSy...>`"
-                        }
                     clean_line = line_str.replace("`", "").strip()[:50]
                     if not clean_line.startswith("warning: conversation"):
                         display_lines.append(f"ℹ️ {clean_line}")
@@ -846,8 +902,14 @@ class AgyRunner:
 
         # Post-execution Quota/API failure check
         if return_code != 0:
-            if is_quota_error(final_response) or return_code == 3:
-                ret = await handle_quota_rotation(f"Process Exit {return_code}")
+            full_check = f"{final_response} {' '.join(display_lines[-3:])}"
+            if is_quota_error(full_check):
+                ret = await handle_api_rotation("quota", full_check)
+                if ret:
+                    return ret
+            if is_api_key_invalid_error(full_check) or return_code == 3:
+                reason = "quota" if is_quota_error(full_check) else "invalid_key"
+                ret = await handle_api_rotation(reason, full_check)
                 if ret:
                     return ret
 

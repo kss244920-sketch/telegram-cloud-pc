@@ -597,6 +597,27 @@ async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Error in code_command")
         await status_msg.edit_text(f"❌ Verification failed: {e}")
 
+async def validate_gemini_key(key: str) -> tuple[bool, str]:
+    """Tests if a Gemini API key is valid using Google AI Studio REST endpoint."""
+    import aiohttp
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=7)) as resp:
+                if resp.status == 200:
+                    return True, "Active & Verified ✅"
+                elif resp.status == 429:
+                    return True, "Valid Key (Daily Quota Hit) ⚠️"
+                elif resp.status == 400:
+                    return False, "Invalid API Key ❌"
+                elif resp.status == 403:
+                    return False, "Permission Denied / Revoked ❌"
+                else:
+                    return False, f"HTTP Error {resp.status} ❌"
+    except Exception:
+        # If network error or timeout, accept key to avoid blocking offline usage
+        return True, "Accepted (Timeout on verification) ℹ️"
+
 async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
         return
@@ -638,27 +659,44 @@ async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    state.set_api_keys(extracted_keys)
+    status_msg = await update.message.reply_text("⏳ API Key verify ho rahi hai...")
+
+    valid_keys = []
+    lines_report = []
+
+    for idx, k in enumerate(extracted_keys, 1):
+        is_ok, reason = await validate_gemini_key(k)
+        masked = mask_secrets(k)
+        lines_report.append(f"• Account #{idx}: <code>{masked}</code> → {reason}")
+        if is_ok:
+            valid_keys.append(k)
 
     try:
         await update.message.delete()
     except Exception:
         pass
 
-    if len(extracted_keys) > 1:
-        await update.effective_chat.send_message(
-            f"✅ **{len(extracted_keys)} Accounts ki API Keys pool mein add & Render par sync ho gayi!**\n\n"
-            f"• Currently Active: Account #1\n"
-            f"• Auto-Quota Rotation: **Active 🚀** (Ek account ka quota exceed hote hi bot automatically next account par switch karega)\n"
-            f"• Persistent: Render cloud environment mein permanently saved ✅\n\n"
-            "Status dekhne ke liye: `/key` ya switch ke liye: `/rotate`"
+    if not valid_keys:
+        err_text = (
+            "❌ <b>Koi bhi valid Gemini API Key nahi mili!</b>\n\n"
+            + "\n".join(lines_report) + "\n\n"
+            "👉 Kripya <a href='https://aistudio.google.com/app/apikey'>Google AI Studio</a> se active key copy karke dobara bhejein:\n"
+            "<code>/key &lt;AIzaSy_key&gt;</code>"
         )
-    else:
-        await update.effective_chat.send_message(
-            "✅ **1 API Key pool mein add ho gayi!**\n\n"
-            "💡 Agar quota exceed issue se bachna hai, to aap 4-5 accounts ki keys ek sath bhej sakte hain:\n"
-            "`/key <key1> <key2> <key3>...`"
-        )
+        await status_msg.edit_text(err_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        return
+
+    state.set_api_keys(valid_keys)
+
+    success_text = (
+        f"✅ <b>{len(valid_keys)} Accounts ki Gemini API Keys pool mein add ho gayi!</b>\n\n"
+        + "\n".join(lines_report) + "\n\n"
+        f"• <b>Currently Active:</b> Account #1\n"
+        "• <b>Auto-Quota Rotation:</b> Active 🚀 (Rate limit hit hote hi automatically next key chalegi)\n"
+        "• <b>Persistent:</b> Render cloud environment mein safe ✅\n\n"
+        "Status: <code>/key</code> | Manually switch: <code>/rotate</code> | Reset: <code>/clear_keys</code>"
+    )
+    await status_msg.edit_text(success_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 async def rotate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth_or_reject(update):
@@ -669,6 +707,7 @@ async def rotate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     next_k = state.rotate_api_key()
+    config.configure_agy_settings(use_gemini_api=True)
     masked = mask_secrets(next_k)
     await update.message.reply_text(
         f"🔄 Manually switched to Account Key #{state.active_key_index + 1}/{len(state.api_keys)} (`{masked}`)!"

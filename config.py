@@ -55,7 +55,9 @@ def configure_agy_settings(use_gemini_api: bool = False):
     import json
     dest_dirs = [
         Path.home() / ".gemini" / "antigravity-cli",
-        Path("/root/.gemini/antigravity-cli")
+        Path("/root/.gemini/antigravity-cli"),
+        Path.home() / ".gemini",
+        Path("/root/.gemini")
     ]
     for d in dest_dirs:
         try:

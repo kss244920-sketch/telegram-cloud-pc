@@ -97,6 +97,7 @@ class StateManager:
         next_key = self.api_keys[self.active_key_index]
         config.GEMINI_API_KEY = next_key
         os.environ["GEMINI_API_KEY"] = next_key
+        config.configure_agy_settings(use_gemini_api=True)
         self.save()
         logger.info(f"Auto-rotated to API key index {self.active_key_index + 1}/{len(self.api_keys)}")
         return next_key
