@@ -26,14 +26,17 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "")
 DEFAULT_AGY_MODEL = os.getenv("DEFAULT_AGY_MODEL", "Gemini 3.8 Flash (Low)")
 
+def is_valid_gemini_key(key: str) -> bool:
+    return bool(key and key.strip().startswith("AIzaSy"))
+
 def get_initial_api_keys() -> list[str]:
-    """Extract initial list of API keys from env vars."""
+    """Extract initial list of API keys from env vars, filtering only valid AIzaSy keys."""
     keys = []
     raw = os.getenv("GEMINI_API_KEYS", "")
     if raw:
         import re
-        keys = [k.strip() for k in re.split(r"[\s,;]+", raw) if k.strip()]
-    if not keys and GEMINI_API_KEY:
+        keys = [k.strip() for k in re.split(r"[\s,;]+", raw) if is_valid_gemini_key(k.strip())]
+    if not keys and is_valid_gemini_key(GEMINI_API_KEY):
         keys = [GEMINI_API_KEY.strip()]
     return keys
 
@@ -85,8 +88,9 @@ def configure_agy_settings(use_gemini_api: bool = False):
 
 def restore_auth():
     """Restores agy authentication bundle from environment variable if present, only when not in API key mode."""
-    # When API keys are configured, skip OAuth bundle restore so agy uses GEMINI_API_KEY directly!
-    if os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEYS"):
+    # When valid API keys are configured, skip OAuth bundle restore so agy uses GEMINI_API_KEY directly!
+    valid_keys = get_initial_api_keys()
+    if valid_keys:
         configure_agy_settings(use_gemini_api=True)
         return
     raw_b64 = os.getenv("AGY_AUTH_DATA", "").strip()

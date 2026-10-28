@@ -84,7 +84,8 @@ class StateManager:
 
     def get_active_api_key(self) -> str:
         if not self.api_keys:
-            return config.GEMINI_API_KEY or ""
+            k = config.GEMINI_API_KEY or ""
+            return k if config.is_valid_gemini_key(k) else ""
         if self.active_key_index >= len(self.api_keys):
             self.active_key_index = 0
         return self.api_keys[self.active_key_index]
