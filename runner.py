@@ -160,20 +160,43 @@ class AgyRunner:
             except Exception as e:
                 logger.warning(f"Storage manifest update/restore warning: {e}")
 
-            # Ensure AGENTS.md instructs agy how to deliver files directly to user
+            # Ensure AGENTS.md instructs agy how to deliver files and manage background processes
             agents_md = project_dir / "AGENTS.md"
-            if not agents_md.exists():
-                try:
-                    agents_md.write_text(
-                        "# Workspace Assistant Instructions\n\n"
-                        "1. When the user asks for a file, or when you finish creating/fixing a file that the user needs:\n"
-                        "   Run the shell command: `tg-send <path_to_file> \"<optional caption>\"`\n"
-                        "   This immediately delivers the actual file directly into the user's Telegram chat.\n"
-                        "2. All files uploaded by the user are stored in `inbox/` and backed up to Telegram storage channel as listed in `TELEGRAM_STORAGE.md`.\n",
-                        encoding="utf-8"
-                    )
-                except Exception:
-                    pass
+            agents_md_content = (
+                "# Workspace Assistant & Antigravity Autonomous Pair Programmer Instructions\n\n"
+                "You are the user's primary AI pair programmer running in this Cloud PC, communicating directly over Telegram.\n"
+                "The user expects you to act autonomously, intelligently, and proactively — just like Google Antigravity.\n\n"
+                "## Communication & Language:\n"
+                "- The user speaks Hindi, Hinglish, and English naturally (e.g. 'Oye win go bot start kar de', 'respond nahi kar raha check kar kya hua').\n"
+                "- Understand their intent immediately. Never expect them to type terminal syntax; turn their natural language into concrete shell actions autonomously.\n"
+                "- Respond concisely, politely, and informatively in Hinglish / English.\n\n"
+                "## Critical Rule: Long-Running Scripts & Daemons (NEVER BLOCK FOREGROUND):\n"
+                "- The terminal runner has a 180-second inactivity watchdog.\n"
+                "- NEVER run long-running scripts (Telegram bots, WebSocket clients, continuous loops, web servers) in the foreground like `python3 bot.py`.\n"
+                "- ALWAYS launch them as detached background daemons:\n"
+                "  `nohup python3 -u <script.py> > <script.log> 2>&1 &`\n"
+                "- Immediately verify that the background process is running:\n"
+                "  `sleep 2 && ps aux | grep <script.py>`\n"
+                "- Inspect the recent log output to verify healthy startup and zero tracebacks:\n"
+                "  `tail -n 25 <script.log>`\n\n"
+                "## Autonomous Troubleshooting & Self-Healing:\n"
+                "- If the user says 'respond nahi kar raha', 'kya hua', 'error aa raha hai', or 'bot band ho gaya':\n"
+                "  1. Check process status: `ps aux | grep <name>`\n"
+                "  2. Read error logs: `tail -n 50 <name.log>`\n"
+                "  3. Identify the root cause (token issue, crash, exception, network error).\n"
+                "  4. Fix the bug in the code directly using file editing tools.\n"
+                "  5. Restart the process cleanly in the background.\n"
+                "  6. Confirm health and explain the fix clearly to the user.\n\n"
+                "## Telegram File Delivery:\n"
+                "1. When the user asks for a file, or when you finish creating/fixing a file that the user needs:\n"
+                "   Run the shell command: `tg-send <path_to_file> \"<optional caption>\"`\n"
+                "   This immediately delivers the actual file directly into the user's Telegram chat.\n"
+                "2. All files uploaded by the user are stored in `inbox/` and backed up to Telegram storage channel as listed in `TELEGRAM_STORAGE.md`.\n"
+            )
+            try:
+                agents_md.write_text(agents_md_content, encoding="utf-8")
+            except Exception:
+                pass
 
             # Smart Classification: Pure Bash commands run in Shell, everything else runs in agy AI!
             clean_p = prompt.strip()

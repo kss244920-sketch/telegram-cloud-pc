@@ -24,7 +24,7 @@ PORT = int(os.getenv("PORT", "8000"))
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "")
-DEFAULT_AGY_MODEL = os.getenv("DEFAULT_AGY_MODEL", "Gemini 3.8 Flash (Low)")
+DEFAULT_AGY_MODEL = os.getenv("DEFAULT_AGY_MODEL", "Gemini 3.8 Flash (High)")
 
 def is_valid_gemini_key(key: str) -> bool:
     return bool(key and key.strip().startswith("AIzaSy"))
