@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
     # Start Cloud Backup, Pin & Disaster Recovery Daemon
     try:
         from audit_cloud_manager import start_backup_daemon
-        start_backup_daemon(interval_seconds=15 * 60)
+        start_backup_daemon(interval_seconds=3 * 3600)
         logger.info("☁️ Telegram Cloud PC Auto Cloud Backup & Pin Daemon active! ✅")
     except Exception as e:
         logger.warning(f"Error starting backup daemon: {e}")
@@ -125,6 +125,10 @@ async def home():
         f"<p>Storage Channel: <code>{config.STORAGE_CHANNEL_ID}</code></p>"
         "</body></html>"
     )
+
+@app.get("/is_busy")
+async def is_busy():
+    return JSONResponse(content={"busy": False, "process": "Idle"}, status_code=200)
 
 @app.get("/backup_and_pin")
 async def backup_and_pin():

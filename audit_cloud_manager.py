@@ -146,19 +146,18 @@ def auto_restore_latest() -> bool:
             logger.warning(f"Auto-restore check error on {ch}: {e}")
     return False
 
-def start_backup_daemon(interval_seconds: int = 15 * 60):
+def start_backup_daemon(interval_seconds: int = 3 * 3600):
     def _worker():
         try:
             auto_restore_latest()
         except Exception:
             pass
-        time.sleep(60)
         while True:
+            time.sleep(interval_seconds)
             try:
-                dispatch_and_pin_backup(trigger_reason="15-Minute Sync Checkpoint")
+                dispatch_and_pin_backup(trigger_reason="3-Hour Scheduled Restart Checkpoint")
             except Exception:
                 pass
-            time.sleep(interval_seconds)
     t = threading.Thread(target=_worker, daemon=True, name="CloudPCBackupDaemon")
     t.start()
     return t
