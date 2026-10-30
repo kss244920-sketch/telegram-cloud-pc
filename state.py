@@ -302,10 +302,21 @@ class StateManager:
         try:
             with open(STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+            try:
+                from turso_sync import TursoCloudManager
+                TursoCloudManager("telegram_pc", config.DATA_DIR).set_async("state", json.dumps(data, indent=2))
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"State save failed: {e}")
 
     def load(self):
+        try:
+            from turso_sync import TursoCloudManager
+            TursoCloudManager("telegram_pc", config.DATA_DIR).restore_all({"state": "state.json"})
+        except Exception:
+            pass
+
         if not STATE_FILE.exists():
             initial_keys = config.get_initial_api_keys()
             if initial_keys:
