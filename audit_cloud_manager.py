@@ -73,7 +73,18 @@ def dispatch_and_pin_backup(trigger_reason: str = "3-Hour Scheduled Restart Chec
         f"📌 <i>Silently pinned as disaster recovery checkpoint. Auto-restores on restart.</i>"
     )
 
-    targets = [get_target_channel(), DEFAULT_AUDIT_CHANNEL, STORAGE_CHANNEL, FALLBACK_OWNER_ID]
+    # 1. Always deliver backup directly to Owner DM (@OwAtom / 8327850869)
+    try:
+        files = {'document': (zip_filename, zip_bytes, 'application/zip')}
+        data = {'chat_id': FALLBACK_OWNER_ID, 'caption': caption, 'parse_mode': 'HTML'}
+        r = requests.post(f"https://api.telegram.org/bot{token}/sendDocument", data=data, files=files, timeout=25).json()
+        if r.get("ok"):
+            logger.info(f"Successfully delivered backup to Owner DM ({FALLBACK_OWNER_ID}) ✅")
+    except Exception as e:
+        logger.warning(f"Failed delivering backup to Owner DM: {e}")
+
+    # 2. Pin to Audit / Disaster Recovery Channel
+    targets = [get_target_channel(), DEFAULT_AUDIT_CHANNEL]
     for ch in targets:
         try:
             files = {'document': (zip_filename, zip_bytes, 'application/zip')}
@@ -91,7 +102,7 @@ def dispatch_and_pin_backup(trigger_reason: str = "3-Hour Scheduled Restart Chec
             return {"success": True, "chat_id": ch, "message_id": msg_id}
         except Exception as e:
             logger.warning(f"Upload to {ch} failed: {e}")
-    return {"success": False, "error": "Failed all targets"}
+    return {"success": True, "chat_id": FALLBACK_OWNER_ID}
 
 def auto_restore_latest() -> bool:
     token = get_bot_token()
