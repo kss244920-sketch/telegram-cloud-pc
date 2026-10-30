@@ -1,5 +1,7 @@
 import base64
 import logging
+import random
+import time
 import requests
 from typing import Any, List, Optional, Union
 
@@ -135,14 +137,29 @@ class TursoConnection:
                 params = [params]
             stmt["args"] = [self._convert_param(p) for p in params]
         payload = {"requests": [{"type": "execute", "stmt": stmt}]}
-        resp = self.session.post(self.endpoint, json=payload, timeout=15)
-        if resp.status_code != 200:
-            raise Exception(f"Turso HTTP {resp.status_code}: {resp.text}")
-        data = resp.json()
-        first_res = data["results"][0]
-        if first_res["type"] == "error":
-            raise Exception(f"Turso SQL Error: {first_res['error']['message']}")
-        return first_res["response"]["result"]
+        
+        max_retries = 3
+        last_err = None
+        for attempt in range(max_retries):
+            try:
+                resp = self.session.post(self.endpoint, json=payload, timeout=12)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    first_res = data["results"][0]
+                    if first_res["type"] == "error":
+                        raise Exception(f"Turso SQL Error: {first_res['error']['message']}")
+                    return first_res["response"]["result"]
+                elif resp.status_code in (429, 500, 502, 503, 504):
+                    time.sleep(0.3 * (2 ** attempt) + random.uniform(0.05, 0.15))
+                    continue
+                else:
+                    raise Exception(f"Turso HTTP {resp.status_code}: {resp.text}")
+            except (requests.exceptions.RequestException, requests.exceptions.Timeout) as e:
+                last_err = e
+                time.sleep(0.3 * (2 ** attempt) + random.uniform(0.05, 0.15))
+        if last_err:
+            raise last_err
+        raise Exception("Turso request failed after retries")
 
     def cursor(self) -> TursoCursor:
         return TursoCursor(self)
