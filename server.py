@@ -37,6 +37,13 @@ bot_app = create_bot_application()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Telegram Cloud PC terminal bot service...")
+    # Start Cloud Backup, Pin & Disaster Recovery Daemon
+    try:
+        from audit_cloud_manager import start_backup_daemon
+        start_backup_daemon(interval_seconds=15 * 60)
+        logger.info("☁️ Telegram Cloud PC Auto Cloud Backup & Pin Daemon active! ✅")
+    except Exception as e:
+        logger.warning(f"Error starting backup daemon: {e}")
     await bot_app.initialize()
     await bot_app.start()
 
@@ -118,6 +125,15 @@ async def home():
         f"<p>Storage Channel: <code>{config.STORAGE_CHANNEL_ID}</code></p>"
         "</body></html>"
     )
+
+@app.get("/backup_and_pin")
+async def backup_and_pin():
+    try:
+        from audit_cloud_manager import dispatch_and_pin_backup
+        res = dispatch_and_pin_backup(trigger_reason="3-Hour Scheduled Restart Checkpoint")
+        return JSONResponse(content=res, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
 
 @app.get("/health")
 async def health():
