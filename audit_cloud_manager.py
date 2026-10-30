@@ -30,7 +30,7 @@ def get_bot_token():
     return os.getenv("BOT_TOKEN", "").strip()
 
 def get_target_channel():
-    return os.getenv("AUDIT_CHANNEL", "").strip() or os.getenv("STORAGE_CHANNEL_ID", "").strip() or DEFAULT_AUDIT_CHANNEL
+    return os.getenv("AUDIT_CHANNEL", "").strip() or DEFAULT_AUDIT_CHANNEL
 
 def create_backup_archive():
     bio = io.BytesIO()
